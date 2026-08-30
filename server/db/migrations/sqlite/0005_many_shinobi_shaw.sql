@@ -1,0 +1,2 @@
+DROP INDEX `document_chunks_upload_chunk_idx`;--> statement-breakpoint
+CREATE UNIQUE INDEX `document_chunks_upload_generation_chunk_idx` ON `document_chunks` (`upload_id`,`ingestion_id`,`chunk_index`);

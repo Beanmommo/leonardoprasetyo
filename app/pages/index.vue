@@ -1,93 +1,58 @@
 <script setup lang="ts">
+import { useNow } from '@vueuse/core'
+
 const input = ref('')
 const loading = ref(false)
-const chatId = crypto.randomUUID()
+const greeting = 'Ask about Leonardo\'s experience.'
+const now = useNow({ interval: 60_000 })
 
-const { user } = useUserSession()
+const { createChat: createLocalChat, hydrate, quota, storageError } = useLocalChats()
 
-const greeting = computed(() => {
-  const hour = new Date().getHours()
-  let timeGreeting = 'Good evening'
-  if (hour < 12) timeGreeting = 'Good morning'
-  else if (hour < 18) timeGreeting = 'Good afternoon'
-
-  const name = user.value?.name?.split(' ')[0] || user.value?.username
-
-  return name ? `${timeGreeting}, ${name}` : `${timeGreeting}`
+const cachedQuotaExhausted = computed(() => {
+  if (!quota.value || quota.value.remaining > 0) return false
+  return !quota.value.resetAt || Date.parse(quota.value.resetAt) > now.value.getTime()
 })
 
-const {
-  dropzoneRef,
-  dragging,
-  open,
-  files,
-  uploading,
-  uploadedFiles,
-  removeFile,
-  clearFiles
-} = useFileUploadWithStatus(chatId)
-
-const { csrf, headerName } = useCsrf()
+onMounted(hydrate)
 
 async function createChat(prompt: string) {
-  input.value = prompt
+  const question = prompt.trim()
+  if (!question || loading.value) return
+
   loading.value = true
 
-  const parts: Array<{ type: string, text?: string, mediaType?: string, url?: string }> = [{ type: 'text', text: prompt }]
-
-  if (uploadedFiles.value.length > 0) {
-    parts.push(...uploadedFiles.value)
+  try {
+    const chat = createLocalChat(question)
+    await navigateTo(`/chat/${chat.id}`)
+  } finally {
+    loading.value = false
   }
-
-  const chat = await $fetch('/api/chats', {
-    method: 'POST',
-    headers: { [headerName]: csrf },
-    body: {
-      id: chatId,
-      message: {
-        role: 'user',
-        parts
-      }
-    }
-  })
-
-  refreshNuxtData('chats')
-  navigateTo(`/chat/${chat?.id}`)
 }
 
 async function onSubmit() {
   await createChat(input.value)
-  clearFiles()
 }
 
 const quickChats = [
   {
-    label: 'Why use Nuxt UI?',
-    icon: 'i-logos-nuxt-icon'
+    label: 'What is Leonardo working on now?',
+    logo: true
   },
   {
-    label: 'Help me create a Vue composable',
-    icon: 'i-logos-vue'
+    label: 'What is his full-stack experience?',
+    icon: 'i-lucide-panels-top-left'
   },
   {
-    label: 'Tell me more about UnJS',
-    icon: 'i-logos-unjs'
+    label: 'How has he applied AI and RAG?',
+    icon: 'i-lucide-sparkles'
   },
   {
-    label: 'Why should I consider VueUse?',
-    icon: 'i-logos-vueuse'
+    label: 'Which cloud platforms has he used?',
+    icon: 'i-lucide-cloud'
   },
   {
-    label: 'Tailwind CSS best practices',
-    icon: 'i-logos-tailwindcss-icon'
-  },
-  {
-    label: 'What is the weather in Bordeaux?',
-    icon: 'i-lucide-sun'
-  },
-  {
-    label: 'Show me a chart of sales data',
-    icon: 'i-lucide-line-chart'
+    label: 'Summarise his energy industry experience',
+    icon: 'i-lucide-zap'
   }
 ]
 </script>
@@ -103,38 +68,46 @@ const quickChats = [
     </template>
 
     <template #body>
-      <div ref="dropzoneRef" class="flex flex-1">
-        <DragDropOverlay :show="dragging" />
-
+      <div class="flex flex-1">
         <UContainer class="flex-1 flex flex-col justify-center gap-4 sm:gap-6 py-8">
-          <h1 class="text-3xl sm:text-4xl text-highlighted font-bold">
-            {{ greeting }}
-          </h1>
+          <div>
+            <h1 class="text-3xl sm:text-4xl text-highlighted font-bold">
+              {{ greeting }}
+            </h1>
+          </div>
+
+          <UAlert
+            v-if="storageError"
+            color="warning"
+            variant="soft"
+            icon="i-lucide-hard-drive"
+            :description="storageError"
+          />
 
           <UChatPrompt
             v-model="input"
             :status="loading ? 'streaming' : 'ready'"
-            :disabled="uploading"
+            :disabled="loading"
+            :maxlength="1000"
+            placeholder="Ask about Leonardo's work, skills or experience..."
             class="[view-transition-name:chat-prompt]"
             color="neutral"
             variant="subtle"
             :ui="{ base: 'px-1.5' }"
             @submit="onSubmit"
           >
-            <template v-if="files.length > 0" #header>
-              <ChatFiles :files="files" @remove="removeFile" />
-            </template>
-
             <template #footer>
-              <div class="flex items-center gap-1">
-                <ChatFileUploadButton :open="open" />
-
-                <ModelSelect />
-              </div>
-
-              <UChatPromptSubmit color="neutral" size="sm" :disabled="uploading" />
+              <UChatPromptSubmit
+                color="neutral"
+                size="sm"
+                :disabled="!input.trim() || loading"
+              />
             </template>
           </UChatPrompt>
+
+          <p v-if="cachedQuotaExhausted" class="text-sm text-warning">
+            The last checked network had no questions remaining. Submit again to recheck if your public IP changed.
+          </p>
 
           <div class="flex flex-wrap gap-2">
             <UButton
@@ -146,8 +119,13 @@ const quickChats = [
               color="neutral"
               variant="outline"
               class="rounded-full"
+              :disabled="loading"
               @click="createChat(quickChat.label)"
-            />
+            >
+              <template v-if="quickChat.logo" #leading>
+                <Logo class="size-4 shrink-0" />
+              </template>
+            </UButton>
           </div>
         </UContainer>
       </div>

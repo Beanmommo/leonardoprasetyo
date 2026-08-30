@@ -20,7 +20,7 @@ Full-featured AI Chatbot Nuxt application with authentication, chat history, col
 ## Features
 
 - ⚡️ **Streaming AI messages** powered by the [AI SDK](https://ai-sdk.dev) with thinking/reasoning support
-- 🤖 **Multiple model support** — Claude Haiku 4.5, Gemini 3 Flash and GPT-5 Nano via [Vercel AI Gateway](https://vercel.com/docs/ai-gateway)
+- 🤖 **Cloudflare-hosted AI** — Granite chat generation and Qwen embeddings through Workers AI and AI Gateway
 - 🔍 **Web search** with built-in provider tools (Anthropic, OpenAI)
 - 📊 **Charts and weather** tool calling with rich UI rendering
 - 🔐 **Authentication** via GitHub OAuth using [nuxt-auth-utils](https://github.com/atinux/nuxt-auth-utils)
@@ -57,16 +57,20 @@ pnpm db:migrate
 
 ### AI Integration
 
-This template uses the [Vercel AI SDK](https://ai-sdk.dev/) for streaming AI responses with support for multiple providers through [Vercel AI Gateway](https://vercel.com/docs/ai-gateway). When deployed on Vercel, the AI Gateway is configured automatically.
+The public portfolio chat uses the [Vercel AI SDK](https://ai-sdk.dev/) with Cloudflare's official Workers AI provider. Chat generation runs on `@cf/ibm-granite/granite-4.0-h-micro`; PDF Library ingestion and retrieval use `@cf/qwen/qwen3-embedding-0.6b` with a 1,024-dimensional Vectorize index. Both calls use the Worker `AI` binding and Cloudflare AI Gateway.
 
-For local development, set your API key in `.env`:
+These Cloudflare-hosted models do not require an OpenAI, Google, or other provider API key. Configure the server-owned model variables in `.env`:
 
-```bash
-AI_GATEWAY_API_KEY=<your-vercel-ai-gateway-api-key>
+```dotenv
+AI_GATEWAY_ID=leonardoprasetyo
+CHAT_MODEL=@cf/ibm-granite/granite-4.0-h-micro
+EMBEDDING_PROVIDER=workers-ai
+EMBEDDING_MODEL=@cf/qwen/qwen3-embedding-0.6b
+EMBEDDING_DIMENSIONS=1024
 ```
 
 > [!TIP]
-> With [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), you don't need individual API keys for OpenAI, Anthropic, etc. It provides a unified API to access hundreds of models through a single endpoint with automatic load balancing, fallbacks, and spend monitoring.
+> See [infra/cloudflare/README.md](./infra/cloudflare/README.md) for resource provisioning, Worker secrets, migrations, and deployment commands.
 
 ### Authentication (Optional)
 

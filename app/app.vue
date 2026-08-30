@@ -2,6 +2,7 @@
 const colorMode = useColorMode()
 
 const color = computed(() => colorMode.value === 'dark' ? '#1b1718' : 'white')
+const favicon = computed(() => colorMode.value === 'dark' ? '/logo-dark.png' : '/logo.png')
 
 useHead({
   meta: [
@@ -10,22 +11,22 @@ useHead({
     { key: 'theme-color', name: 'theme-color', content: color }
   ],
   link: [
-    { rel: 'icon', href: '/favicon.ico' }
+    { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
+    { rel: 'icon', type: 'image/png', href: favicon }
   ],
   htmlAttrs: {
     lang: 'en'
   }
 })
 
-const title = 'Nuxt AI Chatbot template'
-const description = 'A full-featured, hackable Nuxt AI chatbot template made with Nuxt UI.'
+const title = 'Leonardo Prasetyo | Full-stack and AI Engineer'
+const description = 'Leonardo Prasetyo\'s portfolio, resume and public AI assistant, grounded in his professional experience.'
 
 useSeoMeta({
   title,
   description,
   ogTitle: title,
   ogDescription: description,
-  ogImage: 'https://ui.nuxt.com/assets/templates/nuxt/chat-light.png',
   twitterCard: 'summary_large_image'
 })
 </script>

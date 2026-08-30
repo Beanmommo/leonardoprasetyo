@@ -2,74 +2,196 @@
 import { useChat } from '@ai-sdk/vue'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
+import { useNow } from '@vueuse/core'
+
+interface PortfolioCitation {
+  id?: string
+  uploadId?: string
+  filename?: string
+  sourceFilename?: string
+  page?: number
+  pageNumber?: number
+  url?: string
+  contentUrl?: string
+  excerpt?: string
+  textPreview?: string
+}
+
+type PortfolioMessage = UIMessage<unknown, { citations: PortfolioCitation[] }>
 
 const route = useRoute()
 const toast = useToast()
-const { model } = useModels()
+const chatId = computed(() => String(route.params.id))
+const pageReady = ref(false)
+const input = ref('')
+const editingMessageId = ref<string | null>(null)
+const votes = ref<Record<string, boolean | null>>({})
+const pendingCitations = ref<PortfolioCitation[]>([])
 const { csrf, headerName } = useCsrf()
-
-const { data } = await useFetch(`/api/chats/${route.params.id}`, {
-  key: `chat-${route.params.id}`,
-  cache: 'force-cache'
-})
-
-const isOwner = computed(() => data.value?.isOwner ?? false)
-const visibility = ref<'public' | 'private'>(data.value?.visibility ?? 'private')
-const title = ref<string | null>(data.value?.title ?? null)
-
-watch(() => data.value?.title, (next) => {
-  title.value = next ?? null
-})
+const now = useNow({ interval: 60_000 })
 
 const {
-  dropzoneRef,
-  dragging,
-  open,
-  files,
-  uploading,
-  uploadedFiles,
-  removeFile,
-  clearFiles
-} = useFileUploadWithStatus(route.params.id as string)
+  hydrated,
+  storageError,
+  quota,
+  hydrate,
+  getChat,
+  saveMessages,
+  consumePendingResponse,
+  updateQuotaFromHeaders
+} = useLocalChats()
 
-const { data: votes } = await useLazyFetch(`/api/chats/${route.params.id}/votes`, {
-  immediate: isOwner.value
+const localChat = computed(() => getChat(chatId.value))
+const cachedQuotaExhausted = computed(() => {
+  if (!quota.value || quota.value.remaining > 0) return false
+  return !quota.value.resetAt || Date.parse(quota.value.resetAt) > now.value.getTime()
+})
+const quotaLabel = computed(() => {
+  if (!quota.value || (quota.value.resetAt && Date.parse(quota.value.resetAt) <= now.value.getTime())) {
+    return 'Up to 5 questions per public IP each UTC day'
+  }
+  return quota.value.remaining === 0
+    ? 'Last checked: 0 remaining — submit to recheck'
+    : `Last checked: ${quota.value.remaining} of ${quota.value.limit} questions remaining`
 })
 
-const input = ref('')
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 
-const { messages, status, error, sendMessage, regenerate, stop } = useChat({
-  id: data.value?.id,
-  messages: data.value?.messages,
-  transport: new DefaultChatTransport({
-    api: `/api/chats/${data.value?.id}`,
-    headers: { [headerName]: csrf },
-    body: {
-      model: model.value
-    }
-  }),
-  onData: async (dataPart) => {
-    if (dataPart.type === 'data-chat-title') {
-      await refreshNuxtData('chats')
-      const chatsCache = useNuxtData<{ id: string, label: string }[]>('chats')
-      const updated = chatsCache.data.value?.find(c => c.id === data.value!.id)
-      if (updated && updated.label !== 'Untitled') {
-        title.value = updated.label
+function normalizeCitations(value: unknown): PortfolioCitation[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((citation) => {
+    if (!isRecord(citation)) return []
+
+    return [{
+      id: typeof citation.id === 'string' ? citation.id : undefined,
+      uploadId: typeof citation.uploadId === 'string' ? citation.uploadId : undefined,
+      filename: typeof citation.filename === 'string' ? citation.filename : undefined,
+      sourceFilename: typeof citation.sourceFilename === 'string' ? citation.sourceFilename : undefined,
+      page: typeof citation.page === 'number' ? citation.page : undefined,
+      pageNumber: typeof citation.pageNumber === 'number' ? citation.pageNumber : undefined,
+      url: typeof citation.url === 'string' ? citation.url : undefined,
+      contentUrl: typeof citation.contentUrl === 'string' ? citation.contentUrl : undefined,
+      excerpt: typeof citation.excerpt === 'string' ? citation.excerpt : undefined,
+      textPreview: typeof citation.textPreview === 'string' ? citation.textPreview : undefined
+    }]
+  }).slice(0, 5)
+}
+
+function getCitations(message: UIMessage): PortfolioCitation[] {
+  const part = message.parts.find(part => part.type === 'data-citations')
+  return part && 'data' in part ? normalizeCitations(part.data) : []
+}
+
+function citationPage(citation: PortfolioCitation): number | undefined {
+  return citation.pageNumber ?? citation.page
+}
+
+function citationLabel(citation: PortfolioCitation): string {
+  const filename = citation.sourceFilename ?? citation.filename ?? 'Resume'
+  const page = citationPage(citation)
+  return page ? `${filename} · page ${page}` : filename
+}
+
+function citationUrl(citation: PortfolioCitation): string {
+  const page = citationPage(citation)
+  const candidate = citation.contentUrl
+    ?? citation.url
+    ?? (citation.uploadId ? `/api/library/files/${encodeURIComponent(citation.uploadId)}/content` : '/library')
+  const base = candidate === '/library' || candidate.startsWith('/api/library/files/')
+    ? candidate
+    : '/library'
+  return page && !base.includes('#') ? `${base}#page=${page}` : base
+}
+
+function requestMessages(messages: PortfolioMessage[]) {
+  return messages
+    .filter(message => message.role === 'user' || message.role === 'assistant')
+    .map(message => ({
+      id: message.id,
+      role: message.role,
+      parts: message.parts.flatMap(part => part.type === 'text'
+        ? [{ type: 'text' as const, text: part.text }]
+        : [])
+    }))
+    .filter(message => message.parts.length > 0)
+    .slice(-8)
+}
+
+const rateAwareFetch: typeof globalThis.fetch = async (input, init) => {
+  const response = await globalThis.fetch(input, init)
+  updateQuotaFromHeaders(response.headers)
+  return response
+}
+
+const transport = new DefaultChatTransport<PortfolioMessage>({
+  api: '/api/chat',
+  headers: { [headerName]: csrf },
+  fetch: rateAwareFetch,
+  prepareSendMessagesRequest({ id, messages, headers }) {
+    return {
+      headers,
+      body: {
+        id,
+        messages: requestMessages(messages)
       }
     }
+  }
+})
+
+const { messages, status, error, sendMessage, regenerate, stop } = useChat<PortfolioMessage>({
+  id: chatId.value,
+  transport,
+  onData(dataPart) {
+    if (dataPart.type === 'data-citations') {
+      pendingCitations.value = normalizeCitations(dataPart.data)
+    }
   },
-  onError(error) {
-    let message = error.message
-    if (typeof message === 'string' && message[0] === '{') {
+  onFinish({ message, messages: completedMessages }) {
+    const citations = pendingCitations.value
+    const nextMessages = completedMessages.map((item) => {
+      if (item.id !== message.id || citations.length === 0 || getCitations(item).length > 0) return item
+
+      return {
+        ...item,
+        parts: [
+          { type: 'data-citations' as const, data: citations },
+          ...item.parts
+        ]
+      }
+    })
+
+    messages.value = nextMessages
+    saveMessages(chatId.value, nextMessages)
+    pendingCitations.value = []
+  },
+  onError(chatError) {
+    saveMessages(chatId.value, messages.value)
+    pendingCitations.value = []
+
+    let description = chatError.message
+    if (typeof description === 'string' && description.trim().startsWith('{')) {
       try {
-        message = JSON.parse(message).message || message
+        const parsed: unknown = JSON.parse(description)
+        if (isRecord(parsed)) {
+          if (typeof parsed.message === 'string') {
+            description = parsed.message
+          } else if (isRecord(parsed.data) && typeof parsed.data.message === 'string') {
+            description = parsed.data.message
+          } else if (typeof parsed.statusMessage === 'string') {
+            description = parsed.statusMessage
+          }
+        }
       } catch {
-        // keep original message on malformed JSON
+        // Keep the response body when it is not valid JSON.
       }
     }
 
     toast.add({
-      description: message,
+      title: 'Unable to answer',
+      description,
       icon: 'i-lucide-alert-circle',
       color: 'error',
       duration: 0
@@ -77,101 +199,91 @@ const { messages, status, error, sendMessage, regenerate, stop } = useChat({
   }
 })
 
-async function handleSubmit(e: Event) {
-  e.preventDefault()
-  if (input.value.trim() && !uploading.value) {
-    sendMessage({
-      text: input.value,
-      files: uploadedFiles.value.length > 0 ? uploadedFiles.value : undefined
-    })
-    input.value = ''
-    clearFiles()
-  }
-}
+const requestActive = computed(() => status.value === 'submitted' || status.value === 'streaming')
+const promptSubmitDisabled = computed(() => {
+  if (requestActive.value) return false
+  return status.value === 'ready' && !input.value.trim()
+})
 
-const editingMessageId = ref<string | null>(null)
+let persistenceTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(messages, () => {
+  if (!pageReady.value || !localChat.value) return
+  clearTimeout(persistenceTimer)
+  persistenceTimer = setTimeout(() => saveMessages(chatId.value, messages.value), 300)
+})
+
+onMounted(async () => {
+  hydrate()
+
+  const chat = getChat(chatId.value)
+  if (chat) {
+    messages.value = chat.messages as PortfolioMessage[]
+  }
+
+  pageReady.value = true
+  await nextTick()
+
+  if (chat && consumePendingResponse(chat.id)) {
+    void regenerate()
+  }
+})
+
+onBeforeUnmount(() => {
+  clearTimeout(persistenceTimer)
+  if (pageReady.value && localChat.value) {
+    saveMessages(chatId.value, messages.value)
+  }
+})
+
+async function handleSubmit(event: Event) {
+  event.preventDefault()
+  const question = input.value.trim()
+  if (!question || status.value === 'streaming' || status.value === 'submitted') return
+
+  input.value = ''
+  pendingCitations.value = []
+  await sendMessage({ text: question })
+}
 
 function startEdit(message: UIMessage) {
   if (editingMessageId.value) return
-
   editingMessageId.value = message.id
 }
 
 async function saveEdit(message: UIMessage, text: string) {
-  try {
-    await $fetch(`/api/chats/${data.value!.id}/messages`, {
-      method: 'DELETE',
-      headers: { [headerName]: csrf },
-      body: { messageId: message.id, type: 'edit' }
-    })
-  } catch {
-    toast.add({ description: 'Failed to save edit.', icon: 'i-lucide-alert-circle', color: 'error' })
-    return
-  }
-
   editingMessageId.value = null
-  sendMessage({ text, messageId: message.id })
+  pendingCitations.value = []
+  await sendMessage({ text, messageId: message.id })
 }
 
 async function regenerateMessage(message: UIMessage) {
-  try {
-    await $fetch(`/api/chats/${data.value!.id}/messages`, {
-      method: 'DELETE',
-      headers: { [headerName]: csrf },
-      body: { messageId: message.id, type: 'regenerate' }
-    })
-  } catch {
-    toast.add({ description: 'Failed to regenerate.', icon: 'i-lucide-alert-circle', color: 'error' })
-    return
-  }
+  pendingCitations.value = []
+  await regenerate({ messageId: message.id })
+}
 
-  regenerate({ messageId: message.id })
+async function retryLastMessage() {
+  pendingCitations.value = []
+  await regenerate()
 }
 
 function getVote(messageId: string) {
-  const vote = votes.value?.find(v => v.messageId === messageId)
-  if (!vote) return null
-  return !!vote.isUpvoted
+  return votes.value[messageId] ?? null
 }
 
-async function vote(message: UIMessage, isUpvoted: boolean) {
-  const snapshot = (votes.value ?? []).map(v => ({ ...v }))
-  const toggling = getVote(message.id) === isUpvoted
-  const next = toggling ? null : isUpvoted
-
-  votes.value = next === null
-    ? (votes.value ?? []).filter(v => v.messageId !== message.id)
-    : [
-        ...(votes.value ?? []).filter(v => v.messageId !== message.id),
-        { chatId: data.value!.id, messageId: message.id, isUpvoted: next }
-      ]
-
-  try {
-    await $fetch(`/api/chats/${data.value!.id}/votes`, {
-      method: 'POST',
-      headers: { [headerName]: csrf },
-      body: next === null ? { messageId: message.id } : { messageId: message.id, isUpvoted: next }
-    })
-  } catch {
-    votes.value = snapshot
-    toast.add({
-      description: 'Failed to save vote',
-      icon: 'i-lucide-alert-circle',
-      color: 'error'
-    })
+function vote(message: UIMessage, isUpvoted: boolean) {
+  const current = votes.value[message.id]
+  if (current === isUpvoted) {
+    votes.value[message.id] = null
+  } else {
+    votes.value[message.id] = isUpvoted
   }
 }
-
-onMounted(() => {
-  if (isOwner.value && data.value?.messages.length === 1) {
-    regenerate()
-  }
-})
 </script>
 
 <template>
   <UDashboardPanel
-    v-if="data?.id"
+    v-if="pageReady && localChat"
     id="chat"
     class="relative min-h-0"
     :ui="{ body: 'p-0 sm:p-0 overscroll-none' }"
@@ -179,114 +291,138 @@ onMounted(() => {
     <template #header>
       <Navbar>
         <template #title>
-          <ChatTitle
-            :chat-id="data!.id"
-            :title="title"
-            :is-owner="isOwner"
-            @update:title="title = $event"
-          />
+          <div class="min-w-0">
+            <p class="truncate text-sm font-medium text-highlighted">
+              {{ localChat.title }}
+            </p>
+            <p class="hidden text-xs text-muted sm:block">
+              Saved only in this browser
+            </p>
+          </div>
         </template>
 
-        <ChatVisibility
-          v-if="isOwner"
-          :chat-id="data!.id"
-          :visibility="visibility"
-          @update:visibility="visibility = $event"
+        <UBadge
+          color="neutral"
+          variant="soft"
+          icon="i-lucide-shield-check"
+          :label="quotaLabel"
+          class="hidden sm:flex"
         />
       </Navbar>
     </template>
 
     <template #body>
-      <div ref="dropzoneRef" class="flex flex-1">
-        <DragDropOverlay v-if="isOwner" :show="dragging" />
+      <UContainer class="flex-1 flex flex-col gap-4 sm:gap-6">
+        <UAlert
+          v-if="storageError"
+          color="warning"
+          variant="soft"
+          icon="i-lucide-hard-drive"
+          :description="storageError"
+          class="mt-20"
+        />
 
-        <UContainer class="flex-1 flex flex-col gap-4 sm:gap-6">
-          <UChatMessages
-            should-auto-scroll
-            :messages="messages"
-            :status="status"
-            :spacing-offset="isOwner ? 200 : 0"
-            class="pt-(--ui-header-height) pb-4 sm:pb-6"
-          >
-            <template #indicator>
-              <div class="flex items-center gap-1.5">
-                <ChatIndicator />
+        <UChatMessages
+          should-auto-scroll
+          :messages="messages"
+          :status="status"
+          :spacing-offset="200"
+          class="pt-(--ui-header-height) pb-4 sm:pb-6"
+        >
+          <template #indicator>
+            <div class="flex items-center gap-1.5">
+              <ChatIndicator />
+              <UChatShimmer text="Sussing Leonardo's digital footprint..." class="text-sm" />
+            </div>
+          </template>
 
-                <UChatShimmer text="Thinking..." class="text-sm" />
-              </div>
-            </template>
+          <template #content="{ message }">
+            <ChatMessageContent
+              :message="message"
+              :editing="editingMessageId === message.id"
+              @save="saveEdit"
+              @cancel-edit="editingMessageId = null"
+            />
 
-            <template #files="{ message, parts }">
-              <ChatFilePreview
-                v-for="(part, index) in parts"
-                :key="`${message.id}-${index}`"
-                :name="getFileName(part.url)"
-                :type="part.mediaType"
-                :preview-url="part.url"
-                size="3xl"
-              />
-            </template>
-
-            <template #content="{ message }">
-              <ChatMessageContent
-                :message="message"
-                :editing="isOwner && editingMessageId === message.id"
-                @save="saveEdit"
-                @cancel-edit="editingMessageId = null"
-              />
-            </template>
-
-            <template v-if="isOwner" #actions="{ message }">
-              <ChatMessageActions
-                :message="message"
-                :streaming="status === 'streaming' && message.id === messages[messages.length - 1]?.id"
-                :editing="editingMessageId === message.id"
-                :vote="getVote(message.id)"
-                @vote="(_message, isUpvoted) => vote(_message, isUpvoted)"
-                @edit="startEdit"
-                @regenerate="regenerateMessage"
-              />
-            </template>
-          </UChatMessages>
-
-          <UChatPrompt
-            v-if="isOwner"
-            v-model="input"
-            :error="error"
-            :disabled="uploading"
-            color="neutral"
-            variant="subtle"
-            class="sticky bottom-0 [view-transition-name:chat-prompt] rounded-b-none z-10"
-            :ui="{ base: 'px-1.5' }"
-            @submit="handleSubmit"
-          >
-            <template v-if="files.length > 0" #header>
-              <ChatFiles :files="files" @remove="removeFile" />
-            </template>
-
-            <template #footer>
-              <div class="flex items-center gap-1">
-                <ChatFileUploadButton :open="open" />
-
-                <ModelSelect />
-              </div>
-
-              <UChatPromptSubmit
-                :status="status"
-                :disabled="uploading"
+            <div v-if="getCitations(message).length" class="mt-3 flex flex-wrap gap-2">
+              <UButton
+                v-for="(citation, index) in getCitations(message)"
+                :key="citation.id ?? `${message.id}-${index}`"
+                :to="citationUrl(citation)"
+                target="_blank"
+                :label="citationLabel(citation)"
+                icon="i-lucide-file-search"
+                trailing-icon="i-lucide-arrow-up-right"
                 color="neutral"
-                size="sm"
-                @stop="stop()"
-                @reload="regenerate()"
+                variant="outline"
+                size="xs"
+                class="rounded-full"
               />
-            </template>
-          </UChatPrompt>
-        </UContainer>
-      </div>
+            </div>
+          </template>
+
+          <template #actions="{ message }">
+            <ChatMessageActions
+              :message="message"
+              :streaming="status === 'streaming' && message.id === messages[messages.length - 1]?.id"
+              :editing="editingMessageId === message.id"
+              :vote="getVote(message.id)"
+              @vote="(_message, isUpvoted) => vote(_message, isUpvoted)"
+              @edit="startEdit"
+              @regenerate="regenerateMessage"
+            />
+          </template>
+        </UChatMessages>
+
+        <UChatPrompt
+          v-model="input"
+          :error="error"
+          :maxlength="1000"
+          placeholder="Ask a follow-up about Leonardo..."
+          color="neutral"
+          variant="subtle"
+          class="sticky bottom-0 [view-transition-name:chat-prompt] rounded-b-none z-10"
+          :ui="{ base: 'px-1.5' }"
+          @submit="handleSubmit"
+        >
+          <template #footer>
+            <span
+              class="px-1 text-xs"
+              :class="cachedQuotaExhausted ? 'text-warning' : 'text-muted'"
+            >
+              {{ quotaLabel }}
+            </span>
+
+            <UChatPromptSubmit
+              :status="status"
+              :disabled="promptSubmitDisabled"
+              color="neutral"
+              size="sm"
+              @stop="stop()"
+              @reload="retryLastMessage"
+            />
+          </template>
+        </UChatPrompt>
+      </UContainer>
+    </template>
+  </UDashboardPanel>
+
+  <UDashboardPanel v-else-if="!pageReady || !hydrated" id="chat-loading" class="min-h-0">
+    <template #header>
+      <Navbar />
+    </template>
+    <template #body>
+      <UContainer class="flex-1 flex flex-col justify-center gap-4">
+        <USkeleton class="h-6 w-48" />
+        <USkeleton class="h-24 w-full" />
+      </UContainer>
     </template>
   </UDashboardPanel>
 
   <UContainer v-else class="flex-1 flex flex-col gap-4 sm:gap-6">
-    <UError :error="{ statusMessage: 'Chat not found', statusCode: 404 }" class="min-h-full" />
+    <UError
+      :error="{ statusMessage: 'This chat is not stored in this browser', statusCode: 404 }"
+      class="min-h-full"
+    />
   </UContainer>
 </template>

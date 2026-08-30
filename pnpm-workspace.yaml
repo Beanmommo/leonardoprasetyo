@@ -5,7 +5,20 @@ allowBuilds:
   maplibre-gl: false
   unrs-resolver: false
   vue-demi: false
+  workerd: false
+
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260829.1'
 
 overrides:
   # Pin h3 to v1: nuxt-csurf still uses the v1 event API (event.req.headers.get), breaks on h3 v2 RC
   h3: 1.15.11
+  # Security-patched transitive versions used by the production/runtime graph.
+  '@babel/core@>=7.0.0 <8.0.0': 7.29.6
+  'brace-expansion@>=2.0.0 <3.0.0': 2.1.4
+  'brace-expansion@>=5.0.0 <6.0.0': 5.0.9
+  'esbuild@>=0.27.3 <0.28.1': 0.28.1
+  'nanoid@>=3.0.0 <4.0.0': 3.3.18
+  'svgo@>=4.0.0 <5.0.0': 4.0.2
+  'tar@>=7.0.0 <8.0.0': 7.5.21
+  'undici@>=6.0.0 <7.0.0': 6.28.0

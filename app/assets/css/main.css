@@ -3,6 +3,7 @@
 
 @theme static {
   --font-sans: 'Public Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
 }
 
 @layer base {

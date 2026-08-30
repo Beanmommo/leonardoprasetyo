@@ -1,34 +1,40 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
+import { LazyModalConfirm, LazyModalRename } from '#components'
 
 const { loggedIn, openInPopup } = useUserSession()
-const { renameChat, deleteChat } = useChatActions()
+const route = useRoute()
+const toast = useToast()
+const overlay = useOverlay()
+const {
+  chats: localChats,
+  hydrate,
+  renameChat: renameLocalChat,
+  deleteChat: deleteLocalChat
+} = useLocalChats()
 
 const sidebarOpen = ref(false)
-const searchOpen = ref(false)
 
-const { data: chats, refresh: refreshChats } = await useFetch('/api/chats', {
-  key: 'chats',
-  transform: data => data.map(chat => ({
-    id: chat.id,
-    label: chat.title || 'Untitled',
-    to: `/chat/${chat.id}`,
-    icon: 'i-lucide-message-circle',
-    createdAt: chat.createdAt
-  }))
-})
+const chats = computed(() => localChats.value.map(chat => ({
+  id: chat.id,
+  label: chat.title || 'Untitled',
+  to: `/chat/${chat.id}`,
+  icon: 'i-lucide-message-circle',
+  createdAt: chat.updatedAt
+})))
 
-onNuxtReady(async () => {
-  const first10 = (chats.value || []).slice(0, 10)
-  for (const chat of first10) {
-    // prefetch the chat and let the browser cache it
-    await $fetch(`/api/chats/${chat.id}`)
+const renameModal = overlay.create(LazyModalRename)
+const deleteModal = overlay.create(LazyModalConfirm, {
+  props: {
+    title: 'Delete local chat',
+    description: 'This removes the conversation from this browser only. This cannot be undone.',
+    color: 'error'
   }
 })
 
-watch(loggedIn, () => {
-  refreshChats()
+onMounted(hydrate)
 
+watch(loggedIn, () => {
   sidebarOpen.value = false
 })
 
@@ -46,12 +52,35 @@ const items = computed(() => groups.value?.flatMap((group) => {
   }))]
 }))
 
+async function renameChat(item: { id: string, label: string }) {
+  const instance = renameModal.open({ title: item.label === 'Untitled' ? '' : item.label })
+  const result = await instance.result
+  if (!result || result === item.label) return
+  renameLocalChat(item.id, result)
+}
+
+async function deleteChat(id: string) {
+  const instance = deleteModal.open()
+  if (!await instance.result) return
+
+  deleteLocalChat(id)
+  toast.add({
+    title: 'Chat deleted',
+    description: 'The conversation was removed from this browser.',
+    icon: 'i-lucide-trash'
+  })
+
+  if (route.params.id === id) {
+    await navigateTo('/')
+  }
+}
+
 function getChatActions(item: { id: string, label: string }): DropdownMenuItem[][] {
   return [[
     {
       label: 'Rename',
       icon: 'i-lucide-pencil',
-      onSelect: () => renameChat(item.id, item.label === 'Untitled' ? '' : item.label)
+      onSelect: () => renameChat(item)
     }
   ], [
     {
@@ -85,10 +114,10 @@ defineShortcuts({
         <NuxtLink
           v-if="!collapsed"
           to="/"
-          class="flex items-end gap-0.5 outline-primary/25 focus-visible:outline-3 rounded-md"
+          class="flex items-end gap-2 outline-primary/25 focus-visible:outline-3 rounded-md"
         >
-          <Logo class="h-8 w-auto shrink-0" />
-          <span class="text-xl font-bold text-highlighted">Chat</span>
+          <Logo class="h-6 w-auto shrink-0" />
+          <span class="text-xl font-bold text-highlighted">Prasetyo</span>
         </NuxtLink>
 
         <UDashboardSidebarCollapse class="ms-auto" />
@@ -102,12 +131,24 @@ defineShortcuts({
             kbds: ['meta', 'o'],
             icon: 'i-lucide-circle-plus'
           }, {
-            label: 'Search',
-            icon: 'i-lucide-search',
-            kbds: ['meta', 'k'],
-            onSelect: () => {
-              searchOpen = true
-            }
+            label: 'Resume',
+            to: '/resume',
+            icon: 'i-lucide-file-text'
+          }, {
+            label: 'Library',
+            to: '/library',
+            icon: 'i-lucide-library-big',
+            type: 'trigger',
+            defaultOpen: true,
+            children: [{
+              label: 'Files',
+              to: '/files',
+              icon: 'i-lucide-files'
+            }, {
+              label: 'RAG Database',
+              to: '/rag-database',
+              icon: 'i-lucide-database'
+            }]
           }]"
           :collapsed="collapsed"
           orientation="vertical"
@@ -170,20 +211,6 @@ defineShortcuts({
         />
       </template>
     </UDashboardSidebar>
-
-    <UDashboardSearch
-      v-model:open="searchOpen"
-      placeholder="Search chats..."
-      :groups="[{
-        id: 'links',
-        items: [{
-          label: 'New chat',
-          to: '/',
-          icon: 'i-lucide-circle-plus',
-          kbds: ['meta', 'o']
-        }]
-      }, ...groups]"
-    />
 
     <div class="flex-1 flex m-4 lg:ml-0 rounded-lg ring ring-default bg-default/75 shadow-sm min-w-0 overflow-hidden">
       <slot />

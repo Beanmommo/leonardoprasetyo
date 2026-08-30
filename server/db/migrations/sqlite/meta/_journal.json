@@ -22,6 +22,27 @@
       "when": 1775142810661,
       "tag": "0002_eager_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787987157531,
+      "tag": "0003_overjoyed_bloodstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787989854286,
+      "tag": "0004_perfect_nova",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787990466884,
+      "tag": "0005_many_shinobi_shaw",
+      "breakpoints": true
     }
   ]
 }
