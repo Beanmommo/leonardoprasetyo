@@ -2,7 +2,7 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { LazyModalConfirm, LazyModalRename } from '#components'
 
-const { loggedIn, openInPopup } = useUserSession()
+const { loggedIn } = useUserSession()
 const route = useRoute()
 const toast = useToast()
 const overlay = useOverlay()
@@ -200,15 +200,6 @@ defineShortcuts({
 
       <template #footer="{ collapsed }">
         <UserMenu v-if="loggedIn" :collapsed="collapsed" />
-        <UButton
-          v-else
-          :label="collapsed ? '' : 'Login with GitHub'"
-          icon="i-simple-icons-github"
-          color="neutral"
-          variant="ghost"
-          class="w-full"
-          @click="openInPopup('/auth/github')"
-        />
       </template>
     </UDashboardSidebar>
 

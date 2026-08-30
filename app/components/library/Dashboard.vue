@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { TableColumn, TableRow } from '@nuxt/ui'
+
 const props = defineProps<{
   view: 'all' | 'files' | 'rag-database'
 }>()
@@ -62,12 +64,20 @@ interface IndexResponse {
   index: VectorIndex
 }
 
+interface SemanticIndexTableRow {
+  name: string
+  embeddingModel: string
+  dimensions: string
+  metric: string
+  publishedVectors: string
+}
+
 const pageContent = computed(() => {
   if (props.view === 'files') {
     return {
       routeLabel: '~/files',
       heading: 'Files',
-      description: 'Inspect the published PDF and its read-only Cloudflare R2 object metadata.',
+      description: '',
       technology: 'R2 OBJECT STORAGE'
     }
   }
@@ -76,7 +86,7 @@ const pageContent = computed(() => {
     return {
       routeLabel: '~/rag-database',
       heading: 'RAG Database',
-      description: 'Inspect the Vectorize index configuration, published vector statistics and safe embedding previews.',
+      description: '',
       technology: 'VECTORIZE'
     }
   }
@@ -116,6 +126,58 @@ const vectorsError = ref<string | null>(null)
 
 const files = computed(() => filesResponse.value?.files ?? [])
 const selectedFile = computed(() => files.value.find(file => file.id === selectedFileId.value) ?? files.value[0])
+const semanticIndexRows = computed<SemanticIndexTableRow[]>(() => {
+  const index = indexResponse.value?.index
+  if (!index) return []
+
+  return [{
+    name: index.name,
+    embeddingModel: index.embeddingModel,
+    dimensions: index.dimensions.toLocaleString(),
+    metric: index.metric,
+    publishedVectors: index.vectorCount.toLocaleString()
+  }]
+})
+const semanticIndexColumns: TableColumn<SemanticIndexTableRow>[] = [
+  { accessorKey: 'name', header: 'Index' },
+  { accessorKey: 'embeddingModel', header: 'Embedding model' },
+  { accessorKey: 'dimensions', header: 'Dimensions' },
+  { accessorKey: 'metric', header: 'Distance metric' },
+  { accessorKey: 'publishedVectors', header: 'Published vectors' }
+]
+const fileColumns: TableColumn<LibraryFile>[] = [
+  { accessorKey: 'originalName', header: 'File' },
+  {
+    id: 'objectKey',
+    accessorFn: file => file.r2?.key ?? '—',
+    header: 'Object key',
+    meta: { class: { td: 'max-w-64 truncate font-mono text-xs text-muted' } }
+  },
+  {
+    id: 'size',
+    accessorFn: file => formatBytes(file.r2?.sizeBytes ?? file.sizeBytes),
+    header: 'Size',
+    meta: { class: { td: 'whitespace-nowrap text-toned' } }
+  },
+  {
+    id: 'pages',
+    accessorFn: file => file.pageCount ?? '—',
+    header: 'Pages',
+    meta: { class: { td: 'text-toned' } }
+  },
+  {
+    accessorKey: 'chunkCount',
+    header: 'Chunks',
+    meta: { class: { td: 'text-toned' } }
+  },
+  {
+    id: 'uploaded',
+    accessorFn: file => formatDate(file.r2?.uploadedAt ?? file.updatedAt),
+    header: 'Uploaded',
+    meta: { class: { td: 'whitespace-nowrap text-toned' } }
+  },
+  { accessorKey: 'status', header: 'Status' }
+]
 
 watch(files, (nextFiles) => {
   if (!nextFiles.length) {
@@ -170,6 +232,14 @@ function formatMagnitude(value: number | null): string {
 function previewValues(values: number[]): string {
   if (!values.length) return 'Preview unavailable'
   return `[${values.map(value => Number(value).toFixed(4)).join(', ')}${values.length >= 12 ? ', …' : ''}]`
+}
+
+function openFile(file: LibraryFile) {
+  void navigateTo(file.contentUrl, { external: true })
+}
+
+function selectFile(_event: Event, row: TableRow<LibraryFile>) {
+  openFile(row.original)
 }
 
 async function loadVectors(reset = false) {
@@ -240,7 +310,7 @@ async function refreshLibrary() {
           <header>
             <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <div class="mb-4 flex flex-wrap items-center gap-2">
+                <div v-if="props.view === 'all'" class="mb-4 flex flex-wrap items-center gap-2">
                   <UBadge
                     color="success"
                     variant="soft"
@@ -252,7 +322,7 @@ async function refreshLibrary() {
                 <h1 class="text-3xl font-bold tracking-tight text-highlighted sm:text-4xl">
                   {{ pageContent.heading }}
                 </h1>
-                <p class="mt-3 max-w-3xl leading-7 text-toned">
+                <p v-if="pageContent.description" class="mt-3 max-w-3xl leading-7 text-toned">
                   {{ pageContent.description }}
                 </p>
               </div>
@@ -277,9 +347,12 @@ async function refreshLibrary() {
             :description="filesError.message"
           />
 
-          <section v-if="props.view !== 'rag-database'" aria-labelledby="r2-objects-heading">
-            <div class="mb-4 flex items-end justify-between gap-4">
-              <div>
+          <section
+            v-if="props.view !== 'rag-database'"
+            :aria-labelledby="props.view === 'files' ? undefined : 'r2-objects-heading'"
+          >
+            <div class="mb-4 flex items-end gap-4" :class="props.view === 'files' ? 'justify-end' : 'justify-between'">
+              <div v-if="props.view !== 'files'">
                 <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-primary">
                   01 / Object storage
                 </p>
@@ -290,8 +363,9 @@ async function refreshLibrary() {
               <span class="text-sm text-muted">{{ files.length }} published file{{ files.length === 1 ? '' : 's' }}</span>
             </div>
 
-            <div v-if="filesStatus === 'pending' && !files.length" class="grid gap-4 lg:grid-cols-2">
-              <USkeleton v-for="index in 2" :key="index" class="h-52 rounded-xl" />
+            <div v-if="filesStatus === 'pending' && !files.length" class="overflow-hidden rounded-xl border border-default">
+              <USkeleton class="h-12 rounded-none" />
+              <USkeleton class="mt-px h-16 rounded-none" />
             </div>
 
             <UCard v-else-if="!files.length" class="text-center">
@@ -305,6 +379,36 @@ async function refreshLibrary() {
                 </p>
               </div>
             </UCard>
+
+            <UTable
+              v-else-if="props.view === 'files'"
+              :data="files"
+              :columns="fileColumns"
+              class="rounded-xl border border-default bg-default"
+              :ui="{ tr: 'data-[selectable=true]:cursor-pointer' }"
+              @select="selectFile"
+            >
+              <template #originalName-cell="{ row }">
+                <a
+                  :href="row.original.contentUrl"
+                  class="flex min-w-0 items-center gap-3 rounded-sm outline-primary focus-visible:outline-2"
+                  :aria-label="`Open ${row.original.originalName}`"
+                >
+                  <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-error/10 text-error">
+                    <UIcon name="i-lucide-file-type-2" class="size-4" />
+                  </span>
+                  <span class="max-w-64 truncate font-medium text-highlighted">{{ row.original.originalName }}</span>
+                </a>
+              </template>
+
+              <template #status-cell="{ row }">
+                <UBadge
+                  :color="row.original.status === 'ready' ? 'success' : 'warning'"
+                  variant="soft"
+                  :label="row.original.status.toUpperCase()"
+                />
+              </template>
+            </UTable>
 
             <div v-else class="grid gap-4 lg:grid-cols-2">
               <button
@@ -401,7 +505,7 @@ async function refreshLibrary() {
               </button>
             </div>
 
-            <div v-if="selectedFile" class="mt-5 overflow-hidden rounded-xl border border-default bg-default">
+            <div v-if="props.view !== 'files' && selectedFile" class="mt-5 overflow-hidden rounded-xl border border-default bg-default">
               <div class="flex flex-col gap-3 border-b border-default px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p class="font-medium text-highlighted">
@@ -430,10 +534,13 @@ async function refreshLibrary() {
             </div>
           </section>
 
-          <section v-if="props.view !== 'files'" aria-labelledby="vectorize-heading">
-            <div class="mb-4">
+          <section
+            v-if="props.view !== 'files'"
+            :aria-labelledby="props.view === 'all' ? 'vectorize-heading' : undefined"
+          >
+            <div v-if="props.view === 'all'" class="mb-4">
               <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-primary">
-                {{ props.view === 'all' ? '02' : '01' }} / Semantic index
+                02 / Semantic index
               </p>
               <h2 id="vectorize-heading" class="mt-1 text-2xl font-semibold text-highlighted">
                 RAG Database
@@ -453,44 +560,55 @@ async function refreshLibrary() {
               class="mb-4"
             />
 
-            <div v-if="indexStatus === 'pending' && !indexResponse" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <USkeleton v-for="index in 4" :key="index" class="h-28 rounded-xl" />
-            </div>
+            <UTable
+              v-if="props.view === 'rag-database'"
+              :data="semanticIndexRows"
+              :columns="semanticIndexColumns"
+              :loading="indexStatus === 'pending'"
+              empty="No semantic index metadata available."
+              class="overflow-hidden rounded-xl border border-default bg-default"
+            />
 
-            <dl v-else-if="indexResponse?.index" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div class="rounded-xl border border-default bg-default p-5">
-                <dt class="text-sm text-muted">
-                  Embedding model
-                </dt>
-                <dd class="mt-2 break-all font-mono text-sm font-semibold text-highlighted">
-                  {{ indexResponse.index.embeddingModel }}
-                </dd>
+            <template v-else>
+              <div v-if="indexStatus === 'pending' && !indexResponse" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <USkeleton v-for="index in 4" :key="index" class="h-28 rounded-xl" />
               </div>
-              <div class="rounded-xl border border-default bg-default p-5">
-                <dt class="text-sm text-muted">
-                  Dimensions
-                </dt>
-                <dd class="mt-2 text-2xl font-bold text-highlighted">
-                  {{ indexResponse.index.dimensions.toLocaleString() }}
-                </dd>
-              </div>
-              <div class="rounded-xl border border-default bg-default p-5">
-                <dt class="text-sm text-muted">
-                  Distance metric
-                </dt>
-                <dd class="mt-2 text-2xl font-bold capitalize text-highlighted">
-                  {{ indexResponse.index.metric }}
-                </dd>
-              </div>
-              <div class="rounded-xl border border-default bg-default p-5">
-                <dt class="text-sm text-muted">
-                  Published vectors
-                </dt>
-                <dd class="mt-2 text-2xl font-bold text-highlighted">
-                  {{ indexResponse.index.vectorCount.toLocaleString() }}
-                </dd>
-              </div>
-            </dl>
+
+              <dl v-else-if="indexResponse?.index" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="rounded-xl border border-default bg-default p-5">
+                  <dt class="text-sm text-muted">
+                    Embedding model
+                  </dt>
+                  <dd class="mt-2 break-all font-mono text-sm font-semibold text-highlighted">
+                    {{ indexResponse.index.embeddingModel }}
+                  </dd>
+                </div>
+                <div class="rounded-xl border border-default bg-default p-5">
+                  <dt class="text-sm text-muted">
+                    Dimensions
+                  </dt>
+                  <dd class="mt-2 text-2xl font-bold text-highlighted">
+                    {{ indexResponse.index.dimensions.toLocaleString() }}
+                  </dd>
+                </div>
+                <div class="rounded-xl border border-default bg-default p-5">
+                  <dt class="text-sm text-muted">
+                    Distance metric
+                  </dt>
+                  <dd class="mt-2 text-2xl font-bold capitalize text-highlighted">
+                    {{ indexResponse.index.metric }}
+                  </dd>
+                </div>
+                <div class="rounded-xl border border-default bg-default p-5">
+                  <dt class="text-sm text-muted">
+                    Published vectors
+                  </dt>
+                  <dd class="mt-2 text-2xl font-bold text-highlighted">
+                    {{ indexResponse.index.vectorCount.toLocaleString() }}
+                  </dd>
+                </div>
+              </dl>
+            </template>
 
             <UAlert
               v-if="vectorsError"
