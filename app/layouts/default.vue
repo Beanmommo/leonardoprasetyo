@@ -116,7 +116,7 @@ defineShortcuts({
           to="/"
           class="flex items-end gap-2 outline-primary/25 focus-visible:outline-3 rounded-md"
         >
-          <Logo class="h-6 w-auto shrink-0" />
+          <Logo class="h-6 w-auto shrink-0 text-primary" />
           <span class="text-xl font-bold text-highlighted">Prasetyo</span>
         </NuxtLink>
 

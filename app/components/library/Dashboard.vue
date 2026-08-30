@@ -36,6 +36,10 @@ interface LibraryVector {
   dimensions: number
   magnitude: number | null
   valuesPreview: number[]
+  projection: {
+    x: number
+    y: number
+  } | null
   indexedAt: string | null
 }
 
@@ -253,14 +257,16 @@ async function loadVectors(reset = false) {
     const response = await $fetch<VectorsResponse>('/api/library/vectors', {
       query: {
         uploadId,
-        limit: 12,
+        limit: 20,
         cursor: reset ? undefined : nextCursor.value ?? undefined
       }
     })
 
     if (uploadId !== selectedFileId.value) return
 
-    vectors.value = reset ? response.items : [...vectors.value, ...response.items]
+    vectors.value = reset
+      ? response.items
+      : [...vectors.value, ...response.items.map(item => ({ ...item, projection: null }))]
     nextCursor.value = response.nextCursor
     hasMoreVectors.value = response.hasMore
   } catch (error) {
@@ -609,6 +615,14 @@ async function refreshLibrary() {
                 </div>
               </dl>
             </template>
+
+            <LibraryEmbeddingProjection
+              v-if="indexResponse?.index && vectors.length"
+              :vectors="vectors"
+              :model="indexResponse.index.embeddingModel"
+              :dimensions="indexResponse.index.dimensions"
+              :metric="indexResponse.index.metric"
+            />
 
             <UAlert
               v-if="vectorsError"

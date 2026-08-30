@@ -27,6 +27,8 @@
     "@nuxt/ui": "^4.11.0",
     "@nuxthub/core": "^0.10.8",
     "@shikijs/langs": "^4.4.3",
+    "@unovis/ts": "^1.6.7",
+    "@unovis/vue": "^1.6.7",
     "@vercel/blob": "^2.8.0",
     "@vueuse/core": "^14.4.0",
     "ai": "^7.0.77",

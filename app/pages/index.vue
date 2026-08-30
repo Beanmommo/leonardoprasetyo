@@ -123,7 +123,7 @@ const quickChats = [
               @click="createChat(quickChat.label)"
             >
               <template v-if="quickChat.logo" #leading>
-                <Logo class="size-4 shrink-0" />
+                <Logo class="size-4 shrink-0 text-primary" />
               </template>
             </UButton>
           </div>

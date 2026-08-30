@@ -77,9 +77,13 @@ export default defineEventHandler(async (event) => {
       ? [[vector.id, vector] as const]
       : []
   }))
-  const items = page.map((row) => {
+  const vectorValues = page.map((row) => {
     const vector = vectorById.get(row.vectorId)
-    const values = vector ? Array.from(vector.values) : []
+    return vector ? Array.from(vector.values) : []
+  })
+  const projections = projectEmbeddings2D(vectorValues)
+  const items = page.map((row, index) => {
+    const values = vectorValues[index]!
     const magnitude = values.length > 0
       ? Math.sqrt(values.reduce((total, value) => total + value * value, 0))
       : null
@@ -93,6 +97,7 @@ export default defineEventHandler(async (event) => {
       dimensions: row.embeddingDimensions,
       magnitude,
       valuesPreview: values.slice(0, 10),
+      projection: projections[index],
       indexedAt: row.indexedAt.toISOString()
     }
   })
