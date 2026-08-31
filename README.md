@@ -72,7 +72,7 @@ EMBEDDING_DIMENSIONS=1024
 > [!TIP]
 > See [infra/cloudflare/README.md](./infra/cloudflare/README.md) for resource provisioning, Worker secrets, migrations, and deployment commands.
 
-### Authentication (Optional)
+### Authentication
 
 This template uses [nuxt-auth-utils](https://github.com/atinux/nuxt-auth-utils) for authentication with GitHub OAuth.
 
@@ -83,6 +83,19 @@ NUXT_OAUTH_GITHUB_CLIENT_ID=<your-github-oauth-app-client-id>
 NUXT_OAUTH_GITHUB_CLIENT_SECRET=<your-github-oauth-app-client-secret>
 NUXT_SESSION_PASSWORD=<your-password-minimum-32-characters>
 ```
+
+Set the OAuth application's callback URL to `http://localhost:8787/auth/github`
+for `pnpm dev:local`, or `https://<your-production-domain>/auth/github` for the
+deployed Worker. GitHub OAuth applications accept a single callback URL, so use
+separate development and production OAuth applications when you need both.
+
+The unlisted `/admin` page uses this sign-in. D1 seeds an administrator user
+for GitHub username `beanmommo` and email `leonardo.prasetyo5@gmail.com`.
+GitHub OAuth claims that seeded identity when either verified value matches;
+authorization then uses the persisted `admin` role. The page uploads PDFs to
+R2, starts durable indexing Workflows, shows current and historical task
+progress, opens stored PDFs in a new tab, and deletes their R2 object, D1
+metadata/chunks, and Vectorize records.
 
 ### Blob Storage (Optional)
 
@@ -109,6 +122,26 @@ Start the development server on `http://localhost:3000`:
 ```bash
 pnpm dev
 ```
+
+To run the built Worker on `http://localhost:8787` with remote Workers AI,
+`leonardoprasetyo-dev` D1, `leonardoprasetyo-uploads-dev` R2, and the
+development Vectorize index:
+
+```bash
+pnpm dev:local
+```
+
+This command rebuilds the Cloudflare Worker, applies its migrations to the
+remote development D1 database, and starts Wrangler with scheduled-event
+testing enabled. The launcher reads only `NUXT_SESSION_PASSWORD`, the two
+`NUXT_OAUTH_GITHUB_*` values, `IP_HASH_SECRET`, `LIBRARY_ADMIN_TOKEN`, and
+optional Wrangler credentials from `.env`; the generated Worker variables
+remain authoritative, so production resource names cannot leak into the local
+simulation through Wrangler's automatic `.env` loading. Run
+`pnpm exec wrangler login` first, and ensure the remote
+`leonardoprasetyo-dev` D1 database, `leonardoprasetyo-uploads-dev` R2 bucket,
+and `leonardoprasetyo-documents-dev` Vectorize index exist. The development D1 UUID belongs in
+`NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID`.
 
 ## Production
 

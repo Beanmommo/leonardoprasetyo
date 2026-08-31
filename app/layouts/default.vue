@@ -131,16 +131,19 @@ defineShortcuts({
             kbds: ['meta', 'o'],
             icon: 'i-lucide-circle-plus'
           }, {
-            label: 'Resume',
-            to: '/resume',
-            icon: 'i-lucide-file-text'
-          }, {
             label: 'Library',
             to: '/library',
             icon: 'i-lucide-library-big',
             type: 'trigger',
             defaultOpen: true,
             children: [{
+              label: 'Resume',
+              to: '/api/library/resume/content',
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              external: true,
+              icon: 'i-lucide-file-user'
+            }, {
               label: 'Files',
               to: '/files',
               icon: 'i-lucide-files'

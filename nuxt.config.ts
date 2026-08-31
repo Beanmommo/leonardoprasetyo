@@ -2,12 +2,16 @@
 const isProductionBuild = process.env.NODE_ENV === 'production'
 const isBuildCommand = process.env.npm_lifecycle_event === 'build'
   || process.argv.includes('build')
+const isCloudflareLocalDev = process.env.CLOUDFLARE_LOCAL_DEV === '1'
 const configuredCloudflareDatabaseId = process.env.NUXT_HUB_CLOUDFLARE_DATABASE_ID
+const configuredDevCloudflareDatabaseId = process.env.NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID
+const configuredDevVectorizeIndex = process.env.VECTORIZE_DEV_INDEX_NAME
 const cloudflareDatabaseIdPattern = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 
 if (
   isProductionBuild
   && isBuildCommand
+  && !isCloudflareLocalDev
   && (
     !configuredCloudflareDatabaseId
     || !cloudflareDatabaseIdPattern.test(configuredCloudflareDatabaseId)
@@ -17,10 +21,46 @@ if (
   throw new Error('NUXT_HUB_CLOUDFLARE_DATABASE_ID must be a real D1 UUID for production builds')
 }
 
-const cloudflareDatabaseId = configuredCloudflareDatabaseId || '00000000-0000-0000-0000-000000000000'
-const cloudflareDatabaseName = 'leonardoprasetyo-prod'
-const cloudflareBucketName = 'leonardoprasetyo-uploads-prod'
-const cloudflareVectorizeIndex = 'leonardoprasetyo-documents-prod'
+if (
+  isProductionBuild
+  && isBuildCommand
+  && isCloudflareLocalDev
+  && (
+    !configuredDevCloudflareDatabaseId
+    || !cloudflareDatabaseIdPattern.test(configuredDevCloudflareDatabaseId)
+    || /^0+$/.test(configuredDevCloudflareDatabaseId.replaceAll('-', ''))
+  )
+) {
+  throw new Error('NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID must be the development D1 UUID for dev:local')
+}
+
+const cloudflareDatabaseId = isCloudflareLocalDev
+  ? configuredDevCloudflareDatabaseId || '00000000-0000-0000-0000-000000000000'
+  : configuredCloudflareDatabaseId || '00000000-0000-0000-0000-000000000000'
+const cloudflareDatabaseName = isCloudflareLocalDev
+  ? 'leonardoprasetyo-dev'
+  : 'leonardoprasetyo-prod'
+const cloudflareBucketName = isCloudflareLocalDev
+  ? 'leonardoprasetyo-uploads-dev'
+  : 'leonardoprasetyo-uploads-prod'
+const cloudflareVectorizeIndex = isCloudflareLocalDev
+  ? configuredDevVectorizeIndex || 'leonardoprasetyo-documents-dev'
+  : 'leonardoprasetyo-documents-prod'
+const cloudflareIndexingWorkflowName = isCloudflareLocalDev
+  ? 'leonardoprasetyo-library-indexing-dev'
+  : 'leonardoprasetyo-library-indexing-prod'
+const remoteCloudflareBinding = isCloudflareLocalDev ? { remote: true } as const : {}
+const requiredCloudflareSecrets = {
+  secrets: {
+    required: [
+      'NUXT_SESSION_PASSWORD',
+      'NUXT_OAUTH_GITHUB_CLIENT_ID',
+      'NUXT_OAUTH_GITHUB_CLIENT_SECRET',
+      'IP_HASH_SECRET',
+      'LIBRARY_ADMIN_TOKEN'
+    ]
+  }
+} as const
 
 export default defineNuxtConfig({
   modules: [
@@ -40,8 +80,9 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
 
   routeRules: {
-    // These mutations are called by CI/CLI and are protected by the
-    // constant-time LIBRARY_ADMIN_TOKEN check rather than browser cookies.
+    // These mutations are protected by an allowlisted GitHub session or the
+    // constant-time LIBRARY_ADMIN_TOKEN check used by CI/CLI. Session-backed
+    // mutations also enforce a same-origin request in assertLibraryAdmin.
     // @ts-expect-error nuxt-csurf adds this route-rule key at runtime, but its
     // module augmentation is not visible through Nuxt 4's generated config type.
     '/api/admin/library/**': { csurf: false }
@@ -63,24 +104,39 @@ export default defineNuxtConfig({
       deployConfig: true,
       nodeCompat: true,
       wrangler: {
+        ...requiredCloudflareSecrets,
         name: 'leonardoprasetyo',
         compatibility_date: '2026-08-29',
         compatibility_flags: ['nodejs_compat'],
         ai: {
-          binding: 'AI'
+          binding: 'AI',
+          ...remoteCloudflareBinding
         },
         d1_databases: [{
           binding: 'DB',
           database_name: cloudflareDatabaseName,
-          database_id: cloudflareDatabaseId
+          database_id: cloudflareDatabaseId,
+          ...remoteCloudflareBinding
         }],
         r2_buckets: [{
           binding: 'BLOB',
-          bucket_name: cloudflareBucketName
+          bucket_name: cloudflareBucketName,
+          ...remoteCloudflareBinding
         }],
         vectorize: [{
           binding: 'VECTORIZE',
-          index_name: cloudflareVectorizeIndex
+          index_name: cloudflareVectorizeIndex,
+          ...remoteCloudflareBinding
+        }],
+        workflows: [{
+          binding: 'INDEXING_WORKFLOW',
+          name: cloudflareIndexingWorkflowName,
+          class_name: 'LibraryIndexingWorkflow',
+          // @ts-expect-error Nitro's vendored Wrangler type lags the current
+          // Wrangler schema, which supports Workflow concurrency limits.
+          concurrency: {
+            limit: 1
+          }
         }],
         vars: {
           AI_GATEWAY_ID: 'leonardoprasetyo',

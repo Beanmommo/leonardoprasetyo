@@ -3,6 +3,7 @@ import { db, schema } from 'hub:db'
 import { and, count, eq, exists, gt, lte, ne } from 'drizzle-orm'
 import { createWorkersAiEmbedding } from './workersAiEmbedding'
 import { getCloudflareConfig, requireCloudflareBinding } from './cloudflareBindings'
+import type { IndexingTaskProgress } from './indexingTasks'
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024
 const MAX_PDF_PAGES = 200
@@ -79,6 +80,10 @@ export type DocumentIngestionResult = {
   extractionMethod: 'pdf-parse' | 'cloudflare-markdown' | 'existing'
   vectorMutationIds: string[]
   alreadyIndexed: boolean
+}
+
+export type DocumentIngestionOptions = {
+  onProgress?: (progress: IndexingTaskProgress) => Promise<void>
 }
 
 function errorMessage(error: unknown): string {
@@ -313,11 +318,40 @@ function inBatches<Item>(items: Item[], size: number): Item[][] {
   return batches
 }
 
-async function deleteVectors(vectorize: Vectorize, ids: string[]): Promise<void> {
+async function deleteVectors(vectorize: Vectorize, ids: string[]): Promise<string[]> {
+  const mutationIds: string[] = []
   for (const batch of inBatches(ids, 1000)) {
     if (batch.length > 0) {
-      await vectorize.deleteByIds(batch)
+      const mutation = await vectorize.deleteByIds(batch)
+      mutationIds.push(mutation.mutationId)
     }
+  }
+  return mutationIds
+}
+
+async function waitForVectorDeletion(
+  vectorize: Vectorize,
+  ids: string[],
+  renewLease: () => Promise<void>
+): Promise<void> {
+  let pending = ids
+  const deadline = Date.now() + VECTOR_VISIBILITY_TIMEOUT_MS
+
+  while (pending.length > 0) {
+    await renewLease()
+    const stillVisible: string[] = []
+    for (const batch of inBatches(pending, 100)) {
+      const visible = await vectorize.getByIds(batch)
+      stillVisible.push(...visible.map(vector => vector.id))
+    }
+    if (stillVisible.length === 0) {
+      return
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Vectorize did not remove ${stillVisible.length} vectors before the visibility timeout`)
+    }
+    pending = stillVisible
+    await new Promise(resolve => setTimeout(resolve, VECTOR_VISIBILITY_POLL_MS))
   }
 }
 
@@ -327,10 +361,14 @@ async function waitForVectors(
   uploadId: string,
   ingestionId: string,
   embeddingModel: string,
-  renewLease: () => Promise<void>
+  renewLease: () => Promise<void>,
+  onProgress?: (current: number, total: number) => Promise<void>
 ): Promise<void> {
   const pending = new Map(chunks.map(chunk => [chunk.vectorId, chunk.contentHash]))
+  const total = pending.size
   const deadline = Date.now() + VECTOR_VISIBILITY_TIMEOUT_MS
+
+  await onProgress?.(0, total)
 
   while (pending.size > 0) {
     await renewLease()
@@ -351,12 +389,14 @@ async function waitForVectors(
     }
 
     if (pending.size === 0) {
+      await onProgress?.(total, total)
       return
     }
     if (Date.now() >= deadline) {
       throw new Error(`Vectorize did not make ${pending.size} current-generation vectors queryable before the visibility timeout`)
     }
 
+    await onProgress?.(total - pending.size, total)
     await new Promise(resolve => setTimeout(resolve, VECTOR_VISIBILITY_POLL_MS))
   }
 }
@@ -478,7 +518,11 @@ async function cleanupPreviousUploads(
   }
 }
 
-export async function ingestDocument(event: H3Event, uploadId: string): Promise<DocumentIngestionResult> {
+export async function ingestDocument(
+  event: H3Event,
+  uploadId: string,
+  options: DocumentIngestionOptions = {}
+): Promise<DocumentIngestionResult> {
   const bucket = requireCloudflareBinding(event, 'BLOB')
   const vectorize = requireCloudflareBinding(event, 'VECTORIZE')
   const config = getCloudflareConfig(event)
@@ -504,7 +548,7 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
         eq(schema.documentChunks.ingestionId, selectedUpload.ingestionId)
       ))
 
-    return {
+    const result: DocumentIngestionResult = {
       uploadId: selectedUpload.id,
       status: 'ready',
       pageCount: selectedUpload.pageCount || 0,
@@ -515,6 +559,7 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
       vectorMutationIds: selectedUpload.vectorMutationId ? [selectedUpload.vectorMutationId] : [],
       alreadyIndexed: true
     }
+    return result
   }
 
   const lease = await acquireDocumentIngestionLease(selectedUpload.id)
@@ -538,7 +583,7 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
           eq(schema.documentChunks.uploadId, upload.id),
           eq(schema.documentChunks.ingestionId, upload.ingestionId)
         ))
-      return {
+      const result: DocumentIngestionResult = {
         uploadId: upload.id,
         status: 'ready',
         pageCount: upload.pageCount || 0,
@@ -549,6 +594,7 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
         vectorMutationIds: upload.vectorMutationId ? [upload.vectorMutationId] : [],
         alreadyIndexed: true
       }
+      return result
     }
 
     const claimTime = new Date()
@@ -568,6 +614,7 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
       throw createError({ statusCode: 404, statusMessage: 'Library upload not found' })
     }
 
+    await options.onProgress?.({ stage: 'reading_pdf', current: 0, total: null })
     await renewDocumentIngestionLease(lease)
     const object = await bucket.get(upload.r2Key)
     if (!object) {
@@ -591,28 +638,66 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
     if (actualChecksum !== upload.checksumSha256) {
       throw new Error('The Library object checksum does not match its upload record')
     }
+    await options.onProgress?.({ stage: 'extracting_text', current: 0, total: null })
     await renewDocumentIngestionLease(lease)
     const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' })
     const extraction = await extractPdf(event, upload.originalName, pdfBlob)
     const pages = validateExtractedPages(extraction.pages)
+    await options.onProgress?.({
+      stage: 'extracting_text',
+      current: pages.length,
+      total: pages.length,
+      pageCount: pages.length
+    })
+    await options.onProgress?.({
+      stage: 'chunking_text',
+      current: 0,
+      total: null,
+      pageCount: pages.length
+    })
     await renewDocumentIngestionLease(lease)
     const chunks = await prepareChunks(upload.checksumSha256, lease.ingestionId, pages)
     if (chunks.length === 0) {
       throw new Error('No indexable chunks were produced from the PDF')
     }
 
+    await options.onProgress?.({
+      stage: 'generating_embeddings',
+      current: 0,
+      total: chunks.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
+
+    let embeddedChunkCount = 0
     const embeddings = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
       await renewDocumentIngestionLease(lease)
-      return createWorkersAiEmbedding(
+      const embedding = await createWorkersAiEmbedding(
         event,
         chunk.textContent,
         { kind: 'document', title: upload.originalName }
       )
+      embeddedChunkCount += 1
+      await options.onProgress?.({
+        stage: 'generating_embeddings',
+        current: embeddedChunkCount,
+        total: chunks.length,
+        pageCount: pages.length,
+        chunkCount: chunks.length
+      })
+      return embedding
     })
 
     // Stage the current generation in D1 before writing Vectorize. If the
     // isolate stops during an upsert, a takeover can discover and remove every
     // vector ID belonging to the abandoned generation.
+    await options.onProgress?.({
+      stage: 'saving_chunks',
+      current: 0,
+      total: chunks.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
     await renewDocumentIngestionLease(lease)
     const previousChunkRows = await db.select({ vectorId: schema.documentChunks.vectorId })
       .from(schema.documentChunks)
@@ -637,12 +722,29 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
       indexedAt: stagingTime,
       createdAt: stagingTime
     }))
+    let savedChunkCount = 0
     for (const batch of inBatches(rows, DB_BATCH_SIZE)) {
       await renewDocumentIngestionLease(lease)
       await db.insert(schema.documentChunks).values(batch)
+      savedChunkCount += batch.length
+      await options.onProgress?.({
+        stage: 'saving_chunks',
+        current: savedChunkCount,
+        total: chunks.length,
+        pageCount: pages.length,
+        chunkCount: chunks.length
+      })
     }
 
     const vectorMutationIds: string[] = []
+    let publishedVectorCount = 0
+    await options.onProgress?.({
+      stage: 'publishing_vectors',
+      current: 0,
+      total: chunks.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
     for (const batch of inBatches(chunks.map((chunk, index) => ({
       id: chunk.vectorId,
       namespace: lease.ingestionId,
@@ -661,23 +763,52 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
       newVectorIds.push(...batch.map(vector => vector.id))
       const mutation = await vectorize.upsert(batch)
       vectorMutationIds.push(mutation.mutationId)
+      publishedVectorCount += batch.length
+      await options.onProgress?.({
+        stage: 'publishing_vectors',
+        current: publishedVectorCount,
+        total: chunks.length,
+        pageCount: pages.length,
+        chunkCount: chunks.length
+      })
     }
 
     // Vectorize acknowledges writes before they are visible to queries. Keep
     // the previous document active until every expected generation marker and
     // content hash can be read back.
+    await options.onProgress?.({
+      stage: 'verifying_vectors',
+      current: 0,
+      total: chunks.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
     await waitForVectors(
       vectorize,
       chunks,
       upload.id,
       lease.ingestionId,
       config.embeddingModel,
-      () => renewDocumentIngestionLease(lease)
+      () => renewDocumentIngestionLease(lease),
+      (current, total) => options.onProgress?.({
+        stage: 'verifying_vectors',
+        current,
+        total,
+        pageCount: pages.length,
+        chunkCount: chunks.length
+      }) || Promise.resolve()
     )
 
     const indexedAt = new Date()
     // Capture the old active document before switching the pointer. Its R2
     // object and vectors remain available until the new revision is ready.
+    await options.onProgress?.({
+      stage: 'activating_document',
+      current: chunks.length,
+      total: chunks.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
     await renewDocumentIngestionLease(lease)
     const previousUploads = await db.select({
       id: schema.uploads.id,
@@ -743,6 +874,13 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
     }
     published = true
 
+    await options.onProgress?.({
+      stage: 'cleaning_previous',
+      current: 0,
+      total: previousUploads.length,
+      pageCount: pages.length,
+      chunkCount: chunks.length
+    })
     await cleanupPreviousUploads(vectorize, bucket, previousUploads, lease)
     return preparedResult
   } catch (error) {
@@ -826,6 +964,113 @@ export async function ingestDocument(event: H3Event, uploadId: string): Promise<
         message: 'Document ingestion lease release failed',
         uploadId: lease.uploadId,
         ingestionId: lease.ingestionId,
+        error: errorMessage(releaseError)
+      }))
+    }
+  }
+}
+
+export type DocumentDeletionResult = {
+  uploadId: string
+  deletedVectorCount: number
+  vectorMutationIds: string[]
+  alreadyDeleted: boolean
+}
+
+export async function deleteDocument(event: H3Event, uploadId: string): Promise<DocumentDeletionResult> {
+  const existing = await db.query.uploads.findFirst({
+    where: () => eq(schema.uploads.id, uploadId)
+  })
+  if (!existing) {
+    throw createError({ statusCode: 404, statusMessage: 'Library upload not found' })
+  }
+  if (existing.status === 'deleted') {
+    return {
+      uploadId,
+      deletedVectorCount: 0,
+      vectorMutationIds: [],
+      alreadyDeleted: true
+    }
+  }
+
+  const vectorize = requireCloudflareBinding(event, 'VECTORIZE')
+  const bucket = requireCloudflareBinding(event, 'BLOB')
+  const lease = await acquireDocumentIngestionLease(uploadId)
+
+  try {
+    const upload = await db.query.uploads.findFirst({
+      where: () => eq(schema.uploads.id, uploadId)
+    })
+    if (!upload) {
+      throw createError({ statusCode: 404, statusMessage: 'Library upload not found' })
+    }
+    if (upload.status === 'deleted') {
+      return {
+        uploadId,
+        deletedVectorCount: 0,
+        vectorMutationIds: [],
+        alreadyDeleted: true
+      }
+    }
+
+    const chunks = await db.select({ vectorId: schema.documentChunks.vectorId })
+      .from(schema.documentChunks)
+      .where(eq(schema.documentChunks.uploadId, upload.id))
+    const vectorIds = chunks.map(chunk => chunk.vectorId)
+    const vectorMutationIds = await deleteVectors(vectorize, vectorIds)
+    await waitForVectorDeletion(
+      vectorize,
+      vectorIds,
+      () => renewDocumentIngestionLease(lease)
+    )
+
+    await renewDocumentIngestionLease(lease)
+    await bucket.delete(upload.r2Key)
+    await renewDocumentIngestionLease(lease)
+
+    const deletedAt = new Date()
+    await db.batch([
+      db.delete(schema.documentChunks).where(and(
+        eq(schema.documentChunks.uploadId, upload.id),
+        leaseOwnershipCondition(lease, deletedAt)
+      )),
+      db.update(schema.uploads).set({
+        status: 'deleted',
+        isActive: false,
+        pageCount: null,
+        vectorMutationId: null,
+        ingestionId: null,
+        indexedAt: null,
+        errorMessage: null,
+        deletedAt,
+        updatedAt: deletedAt
+      }).where(and(
+        eq(schema.uploads.id, upload.id),
+        ne(schema.uploads.status, 'deleted'),
+        leaseOwnershipCondition(lease, deletedAt)
+      ))
+    ])
+
+    const deleted = await db.query.uploads.findFirst({
+      where: () => eq(schema.uploads.id, upload.id)
+    })
+    if (deleted?.status !== 'deleted') {
+      throw new DocumentIngestionLeaseLostError()
+    }
+
+    return {
+      uploadId: upload.id,
+      deletedVectorCount: vectorIds.length,
+      vectorMutationIds,
+      alreadyDeleted: false
+    }
+  } finally {
+    try {
+      await releaseDocumentIngestionLease(lease)
+    } catch (releaseError) {
+      console.error(JSON.stringify({
+        message: 'Document deletion lease release failed',
+        uploadId,
         error: errorMessage(releaseError)
       }))
     }

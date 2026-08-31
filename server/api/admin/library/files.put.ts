@@ -8,7 +8,15 @@ function toHex(buffer: ArrayBuffer): string {
 }
 
 function safePdfName(value: string | undefined): string {
-  const lastSegment = value?.split(/[\\/]/).at(-1) || 'document.pdf'
+  let decodedValue = value
+  if (value) {
+    try {
+      decodedValue = decodeURIComponent(value)
+    } catch {
+      decodedValue = value
+    }
+  }
+  const lastSegment = decodedValue?.split(/[\\/]/).at(-1) || 'document.pdf'
   const sanitized = Array.from(lastSegment, (character) => {
     const code = character.charCodeAt(0)
     return code <= 31 || code === 127 || '"<>:|?*'.includes(character) ? '-' : character

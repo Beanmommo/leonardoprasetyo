@@ -7,6 +7,7 @@ This directory is the deployment contract and runbook for the implemented Nuxt p
 | Concern | Cloudflare service | Responsibility |
 | --- | --- | --- |
 | Nuxt application and API | Workers | Serve the application and keep AI credentials off the browser. |
+| Durable document indexing | Workflows | Run the multi-stage indexing task after the R2 upload request completes, with retries and a concurrency limit of one. |
 | Model inference | Workers AI through AI Gateway | Stream Granite chat completions, create Qwen embeddings, retain operational metadata without prompt/response payloads, and enforce gateway policy. |
 | Vector search | Vectorize | Store and query document-chunk embeddings. |
 | Uploaded file bytes | R2 | Store the original objects. D1 is not intended for file bytes. |
@@ -20,7 +21,7 @@ The application request flow is:
 3. The Worker optionally embeds the latest question, queries Vectorize, and loads matching chunk text from D1.
 4. The Worker runs Granite through the Workers AI binding and AI Gateway, then streams the answer to the browser.
 5. The browser appends the completed response to `localStorage`.
-6. An upload is streamed through an authenticated API route into R2. D1 stores its metadata. A background ingestion step extracts text, chunks it, creates embeddings, and upserts them into Vectorize.
+6. An upload is streamed through an authenticated API route into R2. D1 stores its metadata and a persistent task record, then a Workflow extracts text, chunks it, creates embeddings, and upserts them into Vectorize.
 
 ## Resource contract
 
@@ -32,6 +33,7 @@ The example names are deliberately stable across the application and deployment 
 | `DB` | `leonardoprasetyo-prod` | D1 database used by NuxtHub/Drizzle. |
 | `BLOB` | `leonardoprasetyo-uploads-prod` | Private R2 bucket used by NuxtHub Blob. |
 | `VECTORIZE` | `leonardoprasetyo-documents-prod` | 1,024 dimensions with cosine distance. |
+| `INDEXING_WORKFLOW` | `leonardoprasetyo-library-indexing-prod` | Durable `LibraryIndexingWorkflow`, limited to one concurrent indexing task. |
 
 The embedding model is Cloudflare-hosted `@cf/qwen/qwen3-embedding-0.6b`. It returns 1,024-dimensional vectors, so the Vectorize index must use 1,024 dimensions and cosine distance. Changing embedding models or dimensions later requires creating a new index and re-embedding the corpus.
 
@@ -41,6 +43,28 @@ See [wrangler.bindings.jsonc](./wrangler.bindings.jsonc) for the binding fragmen
 
 The detailed public chat, daily IP quota, PDF ingestion, retrieval, and read-only Library implementation record is in [PORTFOLIO_RAG_PLAN.md](./PORTFOLIO_RAG_PLAN.md).
 
+## Local binding development
+
+`pnpm dev:local` builds the Cloudflare Worker and runs its code locally through
+Wrangler. Workers AI (`AI`), `leonardoprasetyo-dev` D1 (`DB`),
+`leonardoprasetyo-uploads-dev` R2 (`BLOB`), and
+`leonardoprasetyo-documents-dev` (`VECTORIZE`) use remote bindings, while the
+`LibraryIndexingWorkflow` runs through the local Wrangler Worker. Keeping
+the storage trio in the same remote development environment ensures Vectorize
+result IDs resolve to D1 chunk text and D1 object keys resolve to the original
+R2 PDFs. The command applies remote development D1 migrations before starting
+and loads only the declared runtime secrets from `.env`.
+
+The private `/admin` page signs in through GitHub. For local use, configure a
+GitHub OAuth application with callback URL
+`http://localhost:8787/auth/github`; for production use
+`https://<your-production-domain>/auth/github`. Put its client ID and secret in
+`.env` for local development. Migration `0006_seed_library_admin.sql` seeds an
+administrator user for GitHub username `beanmommo` and email
+`leonardo.prasetyo5@gmail.com`. A matching GitHub sign-in claims the row, and
+the persisted `admin` role grants access. The page is intentionally absent from
+the application sidebar.
+
 ## Provisioning sequence
 
 Do not run these commands until the target Cloudflare account and environment names have been confirmed.
@@ -49,12 +73,18 @@ Do not run these commands until the target Cloudflare account and environment na
 pnpm dlx wrangler@latest login
 pnpm dlx wrangler@latest whoami
 
+pnpm dlx wrangler@latest d1 create leonardoprasetyo-dev --location=oc
+pnpm dlx wrangler@latest r2 bucket create leonardoprasetyo-uploads-dev --location=apac
+pnpm dlx wrangler@latest vectorize create leonardoprasetyo-documents-dev --dimensions=1024 --metric=cosine
 pnpm dlx wrangler@latest d1 create leonardoprasetyo-prod --location=oc
 pnpm dlx wrangler@latest r2 bucket create leonardoprasetyo-uploads-prod --location=apac
 pnpm dlx wrangler@latest vectorize create leonardoprasetyo-documents-prod --dimensions=1024 --metric=cosine
 ```
 
-Record the D1 database ID returned by Wrangler. R2 and Vectorize bindings use their resource names.
+Record the D1 database IDs returned by Wrangler. Set the development UUID as
+`NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID` and the production UUID as
+`NUXT_HUB_CLOUDFLARE_DATABASE_ID`. R2 and Vectorize bindings use their resource
+names.
 
 Create the AI Gateway with an API token that has `AI Gateway - Read` and `AI Gateway - Edit` permissions:
 
@@ -76,7 +106,7 @@ pnpm build
 pnpm cloudflare:migrate
 ```
 
-The authoritative RAG schema is the application-owned chain under `server/db/migrations/sqlite/`, including the Library tables in `0003_overjoyed_bloodstrike.sql`, the ingestion lease/generation fields in `0004_perfect_nova.sql`, and generation-scoped chunk uniqueness in `0005_many_shinobi_shaw.sql`. NuxtHub tracks it with `_hub_migrations`. There is intentionally no second infrastructure SQL copy.
+The authoritative RAG schema is the application-owned chain under `server/db/migrations/sqlite/`, including the Library tables in `0003_overjoyed_bloodstrike.sql`, the ingestion lease/generation fields in `0004_perfect_nova.sql`, generation-scoped chunk uniqueness in `0005_many_shinobi_shaw.sql`, and persistent indexing task history in `0006_lazy_arclight.sql`. NuxtHub tracks it with `_hub_migrations`. There is intentionally no second infrastructure SQL copy.
 
 ## Build, secrets, and deploy
 
@@ -86,6 +116,9 @@ The following commands assume the resources above exist, Wrangler is authenticat
 pnpm build
 pnpm cloudflare:dry-run
 
+pnpm exec wrangler secret put NUXT_SESSION_PASSWORD --config .output/server/wrangler.json
+pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_ID --config .output/server/wrangler.json
+pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_SECRET --config .output/server/wrangler.json
 pnpm exec wrangler secret put IP_HASH_SECRET --config .output/server/wrangler.json
 pnpm exec wrangler secret put LIBRARY_ADMIN_TOKEN --config .output/server/wrangler.json
 
@@ -94,13 +127,19 @@ pnpm cloudflare:deploy
 
 `cloudflare:deploy` rebuilds the Worker, applies all pending remote D1 migrations, and deploys only if migration succeeds. `cloudflare:migrate` remains available for an explicit migration-only run.
 
-The Cloudflare-hosted model calls require no OpenAI, Google, or other provider API key. The Workers AI binding authenticates them. The admin/IP secrets remain encrypted Worker secrets, never `vars` or `runtimeConfig.public` values.
+The Cloudflare-hosted model calls require no OpenAI, Google, or other provider API key. The Workers AI binding authenticates them. The OAuth, session, admin-token, and IP secrets remain encrypted Worker secrets, never `vars` or `runtimeConfig.public` values.
 
 The build uses compatibility date `2026-08-29` with `nodejs_compat`. `pdf-parse` is loaded lazily inside the ingestion request with JavaScript evaluation and worker fetches disabled; if it cannot parse in the Worker runtime, ingestion falls back to Cloudflare Workers AI `AI.toMarkdown()` and continues through the same splitter, Qwen embedding, D1, and Vectorize stages. The generated Worker is suitable for Workers Paid; production ingestion should not rely on the Free plan's small CPU allowance.
 
 ## Publish and ingest a PDF
 
-The R2 bucket stays private. Use a bearer token containing at least 32 random bytes. With `PORTFOLIO_ORIGIN` and `LIBRARY_ADMIN_TOKEN` set locally, upload any PDF through the server-only file endpoint, then pass the UUID returned as `file.id` to ingestion:
+The R2 bucket stays private. A signed-in, allowlisted GitHub administrator can
+upload and delete documents at `/admin`. The browser routes require same-origin
+mutations. The `LIBRARY_ADMIN_TOKEN` bearer credential remains available for
+CI or CLI administration and must contain at least 32 random bytes. With
+`PORTFOLIO_ORIGIN` and `LIBRARY_ADMIN_TOKEN` set locally, upload any PDF through
+the server-only file endpoint, then pass the UUID returned as `file.id` to
+the asynchronous ingestion endpoint:
 
 ```bash
 curl --fail-with-body --request PUT \
@@ -117,14 +156,31 @@ curl --fail-with-body --request POST \
   --data '{"uploadId":"<upload-id-from-previous-response>"}'
 ```
 
-The admin route family alone is exempt from browser CSRF cookies because it uses a constant-time bearer-token check rather than ambient browser credentials. `/api/chat` remains CSRF protected. Ingestion requires an explicit upload UUID; there is no implicit "latest file" selection. Repeating ingestion for the current ready checksum is an idempotent no-op. A changed PDF holds a renewable, expiring singleton D1 publication lease, verifies generation-marked vectors, and completes a transactional active-document switch before owner-checked old-object cleanup. An interrupted lease can be taken over after expiry.
+The ingestion endpoint returns `202 Accepted` with `task.id` after the durable
+Workflow is created. The administrator can close the page at that point. The
+admin UI polls `GET /api/admin/library/tasks` for the queue/history view and
+`GET /api/admin/library/tasks/:id` for detailed stage progress. Task history is
+kept in D1 independently of the Workflow instance retention window.
+
+The admin route family is exempt from the application's CSRF-cookie middleware:
+browser mutations are instead protected by the encrypted signed session,
+server-side GitHub allowlist, and an explicit same-origin request check. CLI/CI
+requests use the constant-time bearer-token check. `/api/chat` remains CSRF
+protected. Ingestion requires an explicit upload UUID; there is no implicit
+"latest file" selection. Repeating ingestion for the current ready checksum is
+an idempotent no-op. A changed PDF holds a renewable, expiring singleton D1
+publication lease, verifies generation-marked vectors, and completes a
+transactional active-document switch before owner-checked old-object cleanup.
+Deletion uses the same lease, waits for the asynchronous Vectorize deletion,
+then removes the private R2 object and soft-deletes its D1 upload metadata and
+chunk records. An interrupted lease can be taken over after expiry.
 
 The Cron Trigger `17 0 * * *` runs daily and deletes `question_usage` rows older than seven days. Verify the scheduled event and deletion count in Worker logs after the first deployment.
 
 ## Launch hardening included
 
 - The exact chat model and embedding model are server-controlled; browsers cannot submit provider URLs, credentials, system messages, or alternative models.
-- The production fetch entry streams and limits request bodies before Nitro buffers them: 64 KiB for chat, 10 MiB for a Library PDF, and 16 KiB for the ingest command. Administrative authentication is checked before reading the body.
+- The production fetch entry streams and limits request bodies before Nitro buffers them: 64 KiB for chat, 10 MiB for a Library PDF, and 16 KiB for the ingest command. Administrative authentication is checked before reading the body, and long-running ingestion is handed to `INDEXING_WORKFLOW` after R2 upload.
 - The retired server-persisted `/api/chats/**` and legacy `/api/upload/**` routes return `410`, closing alternate paths around the public quota and private R2 workflow.
 - D1 reserves the daily IP quota atomically. Only a normalized, HMAC-SHA256-derived IP value is stored, and old rows are deleted by the scheduled cleanup.
 - Document ingestion holds a renewable singleton D1 lease with a unique generation ID. Expired work can be taken over, different revisions cannot publish concurrently, and cleanup/finalization is owner checked.
@@ -136,7 +192,7 @@ The Cron Trigger `17 0 * * *` runs daily and deletes `question_usage` rows older
 
 ## Original design record and optional follow-ups
 
-The phases below record the design path and useful post-launch enhancements. The core portfolio RAG feature described above is implemented; optional items such as chat export/import, Turnstile, Queues, and staging resources remain future work.
+The phases below record the design path and useful post-launch enhancements. The core portfolio RAG feature described above is implemented; optional items such as chat export/import, Turnstile, and staging resources remain future work.
 
 ### Phase 1: Bind and deploy
 
@@ -177,7 +233,7 @@ The phases below record the design path and useful post-launch enhancements. The
 - Generate document embeddings with `@cf/qwen/qwen3-embedding-0.6b` through the same AI Gateway and upsert its 1,024-dimensional vectors into `VECTORIZE` with the D1 chunk ID as `vector_id`.
 - For each chat request, embed the latest user question with Qwen's `queries` input and retrieval instruction, query Vectorize, then fetch the matched chunk text from D1.
 - Add citations containing the upload ID and filename, not public R2 URLs.
-- Move ingestion to Cloudflare Queues if extraction/embedding makes upload requests too slow or unreliable.
+- Keep ingestion in Cloudflare Workflows so upload requests return after durable task creation; use Queues only if future workloads need independent fan-out or batching.
 
 ### Phase 6: Security and operations
 

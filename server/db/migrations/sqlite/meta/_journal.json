@@ -43,6 +43,13 @@
       "when": 1787990466884,
       "tag": "0005_many_shinobi_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788144319701,
+      "tag": "0006_lazy_arclight",
+      "breakpoints": true
     }
   ]
 }

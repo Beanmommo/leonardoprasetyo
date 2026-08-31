@@ -26,6 +26,16 @@
       "index_name": "leonardoprasetyo-documents-prod"
     }
   ],
+  "workflows": [
+    {
+      "binding": "INDEXING_WORKFLOW",
+      "name": "leonardoprasetyo-library-indexing-prod",
+      "class_name": "LibraryIndexingWorkflow",
+      "concurrency": {
+        "limit": 1
+      }
+    }
+  ],
   "vars": {
     "AI_GATEWAY_ID": "leonardoprasetyo",
     "CHAT_MODEL": "@cf/ibm-granite/granite-4.0-h-micro",

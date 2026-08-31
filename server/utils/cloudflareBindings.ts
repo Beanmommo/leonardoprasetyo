@@ -2,12 +2,11 @@
 
 import type { H3Event } from 'h3'
 
-export const CLOUDFLARE_BINDING_NAMES = ['AI', 'DB', 'BLOB', 'VECTORIZE'] as const
+export const CLOUDFLARE_BINDING_NAMES = ['AI', 'DB', 'BLOB', 'VECTORIZE', 'INDEXING_WORKFLOW'] as const
 export const CLOUDFLARE_SECRET_NAMES = [
   'IP_HASH_SECRET',
   'LIBRARY_ADMIN_TOKEN'
 ] as const
-
 export const CLOUDFLARE_CHAT_MODEL = '@cf/ibm-granite/granite-4.0-h-micro' as const
 export const CLOUDFLARE_EMBEDDING_MODEL = '@cf/qwen/qwen3-embedding-0.6b' as const
 export const CLOUDFLARE_EMBEDDING_PROVIDER = 'workers-ai' as const
@@ -16,11 +15,17 @@ export const CLOUDFLARE_EMBEDDING_DIMENSIONS = 1024 as const
 type BindingName = typeof CLOUDFLARE_BINDING_NAMES[number]
 type SecretName = typeof CLOUDFLARE_SECRET_NAMES[number]
 
+export type IndexingWorkflowParams = {
+  taskId: string
+  uploadId: string
+}
+
 export type CloudflareRuntimeBindings = {
   AI?: Ai
   DB?: D1Database
   BLOB?: R2Bucket
   VECTORIZE?: Vectorize
+  INDEXING_WORKFLOW?: Workflow<IndexingWorkflowParams>
   AI_GATEWAY_ID?: string
   CHAT_MODEL?: string
   EMBEDDING_PROVIDER?: string
@@ -168,18 +173,59 @@ async function constantTimeTextEqual(left: string, right: string): Promise<boole
   return difference === 0
 }
 
-export async function assertLibraryAdmin(event: H3Event): Promise<void> {
-  const expected = getCloudflareSecret(event, 'LIBRARY_ADMIN_TOKEN')
-  if (!expected || new TextEncoder().encode(expected).byteLength < 32) {
-    throw createError({ statusCode: 503, statusMessage: 'Library administration is not configured securely' })
+type LibraryAdminUser = {
+  role?: string | null
+}
+
+export function isLibraryAdminUser(user: LibraryAdminUser | null | undefined): boolean {
+  return user?.role === 'admin'
+}
+
+export async function getLibraryAdminSession(event: H3Event) {
+  const session = await getUserSession(event)
+  return {
+    authenticated: Boolean(session.user),
+    authorized: isLibraryAdminUser(session.user),
+    user: session.user || null
+  }
+}
+
+function assertSameOriginAdminMutation(event: H3Event): void {
+  if (event.method === 'GET' || event.method === 'HEAD' || event.method === 'OPTIONS') {
+    return
+  }
+
+  const requestOrigin = getRequestURL(event).origin
+  const origin = getRequestHeader(event, 'origin')
+  const fetchSite = getRequestHeader(event, 'sec-fetch-site')?.toLowerCase()
+  if (origin !== requestOrigin && fetchSite !== 'same-origin') {
+    throw createError({ statusCode: 403, statusMessage: 'Cross-origin administrator request rejected' })
+  }
+}
+
+export async function assertLibraryAdmin(event: H3Event): Promise<'session' | 'token'> {
+  const session = await getUserSession(event)
+  if (isLibraryAdminUser(session.user)) {
+    assertSameOriginAdminMutation(event)
+    return 'session'
   }
 
   const authorization = getRequestHeader(event, 'authorization')
   const bearerToken = /^Bearer ([^\s]+)$/.exec(authorization || '')?.[1]
-  const provided = bearerToken || ''
-
-  if (!(await constantTimeTextEqual(provided, expected))) {
-    setResponseHeader(event, 'WWW-Authenticate', 'Bearer realm="library-admin"')
-    throw createError({ statusCode: 401, statusMessage: 'Invalid library administrator token' })
+  if (bearerToken) {
+    const expected = getCloudflareSecret(event, 'LIBRARY_ADMIN_TOKEN')
+    if (!expected || new TextEncoder().encode(expected).byteLength < 32) {
+      throw createError({ statusCode: 503, statusMessage: 'Library administration is not configured securely' })
+    }
+    if (await constantTimeTextEqual(bearerToken, expected)) {
+      return 'token'
+    }
   }
+
+  if (session.user) {
+    throw createError({ statusCode: 403, statusMessage: 'This GitHub account is not authorized for Library administration' })
+  }
+
+  setResponseHeader(event, 'WWW-Authenticate', 'Bearer realm="library-admin"')
+  throw createError({ statusCode: 401, statusMessage: 'GitHub administrator sign-in required' })
 }

@@ -13,6 +13,7 @@ export const users = sqliteTable('users', {
   username: text('username').notNull(),
   provider: text('provider', { enum: ['github'] }).notNull(),
   providerId: text('provider_id').notNull(),
+  role: text('role', { enum: ['user', 'admin'] }).notNull().default('user'),
   ...timestamps
 }, table => [
   uniqueIndex('users_provider_id_idx').on(table.provider, table.providerId)
@@ -106,7 +107,8 @@ export const uploads = sqliteTable('uploads', {
 ])
 
 export const uploadsRelations = relations(uploads, ({ many }) => ({
-  chunks: many(documentChunks)
+  chunks: many(documentChunks),
+  indexingTasks: many(indexingTasks)
 }))
 
 export const documentChunks = sqliteTable('document_chunks', {
@@ -137,6 +139,56 @@ export const documentChunks = sqliteTable('document_chunks', {
 export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
   upload: one(uploads, {
     fields: [documentChunks.uploadId],
+    references: [uploads.id]
+  })
+}))
+
+export const indexingTasks = sqliteTable('indexing_tasks', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  uploadId: text('upload_id').notNull().references(() => uploads.id),
+  workflowInstanceId: text('workflow_instance_id').notNull(),
+  status: text('status', { enum: ['queued', 'processing', 'ready', 'failed'] }).notNull().default('queued'),
+  stage: text('stage', {
+    enum: [
+      'queued',
+      'reading_pdf',
+      'extracting_text',
+      'chunking_text',
+      'generating_embeddings',
+      'saving_chunks',
+      'publishing_vectors',
+      'verifying_vectors',
+      'activating_document',
+      'cleaning_previous',
+      'complete',
+      'failed'
+    ]
+  }).notNull().default('queued'),
+  progressCurrent: integer('progress_current').notNull().default(0),
+  progressTotal: integer('progress_total'),
+  pageCount: integer('page_count'),
+  chunkCount: integer('chunk_count'),
+  embeddingModel: text('embedding_model'),
+  embeddingDimensions: integer('embedding_dimensions'),
+  extractionMethod: text('extraction_method', { enum: ['pdf-parse', 'cloudflare-markdown', 'existing'] }),
+  attempt: integer('attempt').notNull().default(0),
+  errorMessage: text('error_message'),
+  startedAt: integer('started_at', { mode: 'timestamp' }),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
+}, table => [
+  uniqueIndex('indexing_tasks_workflow_instance_idx').on(table.workflowInstanceId),
+  index('indexing_tasks_status_created_idx').on(table.status, table.createdAt),
+  index('indexing_tasks_upload_created_idx').on(table.uploadId, table.createdAt),
+  check('indexing_tasks_progress_current_nonnegative', sql`${table.progressCurrent} >= 0`),
+  check('indexing_tasks_progress_total_nonnegative', sql`${table.progressTotal} IS NULL OR ${table.progressTotal} >= 0`),
+  check('indexing_tasks_attempt_nonnegative', sql`${table.attempt} >= 0`)
+])
+
+export const indexingTasksRelations = relations(indexingTasks, ({ one }) => ({
+  upload: one(uploads, {
+    fields: [indexingTasks.uploadId],
     references: [uploads.id]
   })
 }))

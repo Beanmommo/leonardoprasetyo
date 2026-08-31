@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { WorkflowEntrypoint } from 'cloudflare:workers'
 import { useNitroApp } from 'nitropack/runtime'
 import { isPublicAssetURL } from '#nitro-internal-virtual/public-assets'
 
@@ -8,6 +9,73 @@ const DOCUMENT_PDF_BODY_LIMIT = 10 * 1024 * 1024
 const DEFAULT_BODY_LIMIT = 1024 * 1024
 
 const nitroApp = useNitroApp()
+
+function workflowLocalFetch(path, env, init = {}) {
+  globalThis.__env__ = env
+  return nitroApp.localFetch(path, {
+    ...init,
+    context: {
+      indexingWorkflow: true,
+      cloudflare: { env }
+    }
+  })
+}
+
+export class LibraryIndexingWorkflow extends WorkflowEntrypoint {
+  async run(event, step) {
+    const taskId = event.payload?.taskId
+    const uploadId = event.payload?.uploadId
+    if (typeof taskId !== 'string' || typeof uploadId !== 'string') {
+      throw new Error('Invalid Library indexing workflow payload')
+    }
+
+    try {
+      return await step.do('index Library document', {
+        retries: {
+          limit: 2,
+          delay: '5 seconds',
+          backoff: 'exponential'
+        }
+      }, async () => {
+        const response = await workflowLocalFetch(
+          `/api/internal/library/tasks/${encodeURIComponent(taskId)}/run`,
+          this.env,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ uploadId })
+          }
+        )
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(body.statusMessage || body.message || `Indexing task failed with HTTP ${response.status}`)
+        }
+        return body
+      })
+    } catch (error) {
+      try {
+        await workflowLocalFetch(
+          `/api/internal/library/tasks/${encodeURIComponent(taskId)}/fail`,
+          this.env,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              message: error instanceof Error ? error.message : String(error)
+            })
+          }
+        )
+      } catch (recordError) {
+        console.error(JSON.stringify({
+          message: 'Could not record terminal Library indexing workflow failure',
+          taskId,
+          error: recordError instanceof Error ? recordError.message : String(recordError)
+        }))
+      }
+      throw error
+    }
+  }
+}
 
 class RequestBodyTooLarge extends Error {
   constructor(limit) {
@@ -31,6 +99,7 @@ function normalizePathname(pathname) {
 function bodyLimit(pathname) {
   if (pathname === '/api/chat') return CHAT_BODY_LIMIT
   if (pathname === '/api/admin/library/files') return DOCUMENT_PDF_BODY_LIMIT
+  if (pathname === '/api/admin/library/resume') return DOCUMENT_PDF_BODY_LIMIT
   if (pathname === '/api/admin/library/ingest') return ADMIN_INGEST_BODY_LIMIT
   return DEFAULT_BODY_LIMIT
 }
@@ -65,37 +134,6 @@ async function readBoundedBody(request, limit) {
   return Buffer.concat(chunks, total)
 }
 
-async function constantTimeTextEqual(left, right) {
-  const encoder = new TextEncoder()
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(left)),
-    crypto.subtle.digest('SHA-256', encoder.encode(right))
-  ])
-  const leftBytes = new Uint8Array(leftHash)
-  const rightBytes = new Uint8Array(rightHash)
-  let difference = 0
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index] ^ rightBytes[index]
-  }
-  return difference === 0
-}
-
-async function authorizeLibraryAdmin(request, env) {
-  const expected = env.LIBRARY_ADMIN_TOKEN
-  if (!expected || new TextEncoder().encode(expected).byteLength < 32) {
-    return jsonError(503, 'Library administration is not configured securely')
-  }
-
-  const authorization = request.headers.get('authorization')
-  const bearerToken = /^Bearer ([^\s]+)$/.exec(authorization || '')?.[1]
-  const provided = bearerToken || ''
-  return await constantTimeTextEqual(provided, expected)
-    ? undefined
-    : jsonError(401, 'Invalid library administrator token', {
-        'WWW-Authenticate': 'Bearer realm="library-admin"'
-      })
-}
-
 async function fetchHandler(request, env, context) {
   const url = new URL(request.url)
   url.pathname = normalizePathname(url.pathname)
@@ -111,11 +149,6 @@ async function fetchHandler(request, env, context) {
     || url.pathname.startsWith('/api/upload/')
   ) {
     return jsonError(410, 'This legacy server-persistence route has been retired')
-  }
-
-  if (url.pathname === '/api/admin/library' || url.pathname.startsWith('/api/admin/library/')) {
-    const rejection = await authorizeLibraryAdmin(request, env)
-    if (rejection) return rejection
   }
 
   let body

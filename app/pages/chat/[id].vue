@@ -27,8 +27,14 @@ const input = ref('')
 const editingMessageId = ref<string | null>(null)
 const votes = ref<Record<string, boolean | null>>({})
 const pendingCitations = ref<PortfolioCitation[]>([])
+const dailyLimitModalOpen = ref(false)
+const dailyLimitModalShownWindow = useState<string | null>(
+  'portfolio-daily-limit-modal-shown-window',
+  () => null
+)
 const { csrf, headerName } = useCsrf()
 const now = useNow({ interval: 60_000 })
+const DAILY_LIMIT_MODAL_STORAGE_KEY = 'leonardoprasetyo:daily-limit-modal:v1'
 
 const {
   hydrated,
@@ -45,14 +51,6 @@ const localChat = computed(() => getChat(chatId.value))
 const cachedQuotaExhausted = computed(() => {
   if (!quota.value || quota.value.remaining > 0) return false
   return !quota.value.resetAt || Date.parse(quota.value.resetAt) > now.value.getTime()
-})
-const quotaLabel = computed(() => {
-  if (!quota.value || (quota.value.resetAt && Date.parse(quota.value.resetAt) <= now.value.getTime())) {
-    return 'Up to 5 questions per public IP each UTC day'
-  }
-  return quota.value.remaining === 0
-    ? 'Last checked: 0 remaining — submit to recheck'
-    : `Last checked: ${quota.value.remaining} of ${quota.value.limit} questions remaining`
 })
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -202,7 +200,31 @@ const { messages, status, error, sendMessage, regenerate, stop } = useChat<Portf
 const requestActive = computed(() => status.value === 'submitted' || status.value === 'streaming')
 const promptSubmitDisabled = computed(() => {
   if (requestActive.value) return false
-  return status.value === 'ready' && !input.value.trim()
+  return cachedQuotaExhausted.value || (status.value === 'ready' && !input.value.trim())
+})
+
+function showDailyLimitModalOnce() {
+  if (!import.meta.client || !pageReady.value || !localChat.value || !cachedQuotaExhausted.value) return
+
+  const quotaWindow = quota.value?.resetAt ?? new Date().toISOString().slice(0, 10)
+  if (dailyLimitModalShownWindow.value === quotaWindow) return
+
+  try {
+    if (localStorage.getItem(DAILY_LIMIT_MODAL_STORAGE_KEY) === quotaWindow) {
+      dailyLimitModalShownWindow.value = quotaWindow
+      return
+    }
+    localStorage.setItem(DAILY_LIMIT_MODAL_STORAGE_KEY, quotaWindow)
+  } catch {
+    // The in-memory window still prevents repeats during this browser session.
+  }
+
+  dailyLimitModalShownWindow.value = quotaWindow
+  dailyLimitModalOpen.value = true
+}
+
+watch([cachedQuotaExhausted, requestActive], ([quotaExhausted, active]) => {
+  if (quotaExhausted && !active) showDailyLimitModalOnce()
 })
 
 let persistenceTimer: ReturnType<typeof setTimeout> | undefined
@@ -224,8 +246,10 @@ onMounted(async () => {
   pageReady.value = true
   await nextTick()
 
-  if (chat && consumePendingResponse(chat.id)) {
+  if (chat && consumePendingResponse(chat.id) && !cachedQuotaExhausted.value) {
     void regenerate()
+  } else {
+    showDailyLimitModalOnce()
   }
 })
 
@@ -239,7 +263,12 @@ onBeforeUnmount(() => {
 async function handleSubmit(event: Event) {
   event.preventDefault()
   const question = input.value.trim()
-  if (!question || status.value === 'streaming' || status.value === 'submitted') return
+  if (
+    !question
+    || cachedQuotaExhausted.value
+    || status.value === 'streaming'
+    || status.value === 'submitted'
+  ) return
 
   input.value = ''
   pendingCitations.value = []
@@ -300,14 +329,6 @@ function vote(message: UIMessage, isUpvoted: boolean) {
             </p>
           </div>
         </template>
-
-        <UBadge
-          color="neutral"
-          variant="soft"
-          icon="i-lucide-shield-check"
-          :label="quotaLabel"
-          class="hidden sm:flex"
-        />
       </Navbar>
     </template>
 
@@ -374,36 +395,42 @@ function vote(message: UIMessage, isUpvoted: boolean) {
           </template>
         </UChatMessages>
 
-        <UChatPrompt
-          v-model="input"
-          :error="error"
-          :maxlength="1000"
-          placeholder="Ask a follow-up about Leonardo..."
-          color="neutral"
-          variant="subtle"
-          class="sticky bottom-0 [view-transition-name:chat-prompt] rounded-b-none z-10"
-          :ui="{ base: 'px-1.5' }"
-          @submit="handleSubmit"
-        >
-          <template #footer>
-            <span
-              class="px-1 text-xs"
-              :class="cachedQuotaExhausted ? 'text-warning' : 'text-muted'"
-            >
-              {{ quotaLabel }}
-            </span>
+        <div class="sticky bottom-0 z-10 flex flex-col gap-2">
+          <p
+            v-if="cachedQuotaExhausted"
+            class="self-center rounded-full bg-elevated px-3 py-1.5 text-xs font-medium text-muted ring ring-default"
+          >
+            Ask again tommorow :)
+          </p>
 
-            <UChatPromptSubmit
-              :status="status"
-              :disabled="promptSubmitDisabled"
-              color="neutral"
-              size="sm"
-              @stop="stop()"
-              @reload="retryLastMessage"
-            />
-          </template>
-        </UChatPrompt>
+          <UChatPrompt
+            v-model="input"
+            :error="error"
+            :maxlength="1000"
+            placeholder="Ask a follow-up about Leonardo..."
+            color="neutral"
+            variant="subtle"
+            class="[view-transition-name:chat-prompt] rounded-b-none"
+            :ui="{ base: 'px-1.5' }"
+            @submit="handleSubmit"
+          >
+            <template #footer>
+              <span />
+
+              <UChatPromptSubmit
+                :status="status"
+                :disabled="promptSubmitDisabled"
+                color="neutral"
+                size="sm"
+                @stop="stop()"
+                @reload="retryLastMessage"
+              />
+            </template>
+          </UChatPrompt>
+        </div>
       </UContainer>
+
+      <ChatDailyQuestionLimitModal v-model:open="dailyLimitModalOpen" />
     </template>
   </UDashboardPanel>
 
