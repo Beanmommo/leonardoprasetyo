@@ -2,7 +2,6 @@
 const colorMode = useColorMode()
 
 const color = computed(() => colorMode.value === 'dark' ? '#1b1718' : 'white')
-const favicon = computed(() => colorMode.value === 'dark' ? '/logo-dark.png' : '/logo.png')
 
 useHead({
   meta: [
@@ -11,8 +10,7 @@ useHead({
     { key: 'theme-color', name: 'theme-color', content: color }
   ],
   link: [
-    { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
-    { rel: 'icon', type: 'image/png', href: favicon }
+    { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }
   ],
   htmlAttrs: {
     lang: 'en'
