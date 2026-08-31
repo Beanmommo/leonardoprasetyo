@@ -36,9 +36,9 @@ function parseRangeHeader(value: string, size: number): ParsedRange | undefined 
   }
 }
 
-function contentDisposition(filename: string): string {
+function contentDisposition(filename: string, disposition: 'inline' | 'attachment'): string {
   const fallback = filename.replace(/["\\\r\n]/g, '-').slice(0, 160)
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`
 }
 
 function setPdfSecurityHeaders(headers: Headers): void {
@@ -50,6 +50,9 @@ function setPdfSecurityHeaders(headers: Headers): void {
 
 export default defineEventHandler(async (event) => {
   const { id } = await getValidatedRouterParams(event, z.object({ id: z.string().uuid() }).parse)
+  const { download } = await getValidatedQuery(event, z.object({
+    download: z.enum(['1', 'true']).optional()
+  }).parse)
   const upload = await db.query.uploads.findFirst({
     where: () => and(
       eq(schema.uploads.id, id),
@@ -84,7 +87,7 @@ export default defineEventHandler(async (event) => {
   const headers = new Headers()
   object.writeHttpMetadata(headers)
   headers.set('Content-Type', 'application/pdf')
-  headers.set('Content-Disposition', contentDisposition(upload.originalName))
+  headers.set('Content-Disposition', contentDisposition(upload.originalName, download ? 'attachment' : 'inline'))
   headers.set('ETag', object.httpEtag)
   headers.set('Accept-Ranges', 'bytes')
   headers.set('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')

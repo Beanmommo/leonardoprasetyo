@@ -5,6 +5,9 @@ const props = defineProps<{
   view: 'all' | 'files' | 'rag-database'
 }>()
 
+const route = useRoute()
+const RAG_PAGE_SIZE = 10
+
 interface LibraryFile {
   id: string
   originalName: string
@@ -29,6 +32,7 @@ interface LibraryFile {
 interface LibraryVector {
   vectorId: string
   sourceFilename: string
+  sourceFileUrl: string
   pageNumber: number | null
   chunkIndex: number
   textPreview: string
@@ -62,18 +66,13 @@ interface VectorsResponse {
   items: LibraryVector[]
   nextCursor: string | null
   hasMore: boolean
+  page: number
+  pageSize: number
+  total: number
 }
 
 interface IndexResponse {
   index: VectorIndex
-}
-
-interface SemanticIndexTableRow {
-  name: string
-  embeddingModel: string
-  dimensions: string
-  metric: string
-  publishedVectors: string
 }
 
 const pageContent = computed(() => {
@@ -121,33 +120,47 @@ const {
   key: 'public-library-index'
 })
 
-const selectedFileId = ref('')
+const selectedFileId = ref(props.view === 'rag-database' && typeof route.query.file === 'string' ? route.query.file : '')
 const vectors = ref<LibraryVector[]>([])
 const nextCursor = ref<string | null>(null)
 const hasMoreVectors = ref(false)
+const vectorPage = ref(props.view === 'rag-database' ? parsePageQuery(route.query.page) : 1)
+const vectorTotal = ref(0)
 const vectorsLoading = ref(false)
 const vectorsError = ref<string | null>(null)
 
 const files = computed(() => filesResponse.value?.files ?? [])
 const selectedFile = computed(() => files.value.find(file => file.id === selectedFileId.value) ?? files.value[0])
-const semanticIndexRows = computed<SemanticIndexTableRow[]>(() => {
-  const index = indexResponse.value?.index
-  if (!index) return []
-
-  return [{
-    name: index.name,
-    embeddingModel: index.embeddingModel,
-    dimensions: index.dimensions.toLocaleString(),
-    metric: index.metric,
-    publishedVectors: index.vectorCount.toLocaleString()
-  }]
-})
-const semanticIndexColumns: TableColumn<SemanticIndexTableRow>[] = [
-  { accessorKey: 'name', header: 'Index' },
-  { accessorKey: 'embeddingModel', header: 'Embedding model' },
-  { accessorKey: 'dimensions', header: 'Dimensions' },
-  { accessorKey: 'metric', header: 'Distance metric' },
-  { accessorKey: 'publishedVectors', header: 'Published vectors' }
+const fileFilterItems = computed(() => files.value.map(file => ({
+  label: file.originalName,
+  value: file.id
+})))
+const vectorPageStart = computed(() => vectorTotal.value ? (vectorPage.value - 1) * RAG_PAGE_SIZE + 1 : 0)
+const vectorPageEnd = computed(() => Math.min(vectorPage.value * RAG_PAGE_SIZE, vectorTotal.value))
+const vectorColumns: TableColumn<LibraryVector>[] = [
+  { accessorKey: 'chunkIndex', header: 'Chunk' },
+  {
+    id: 'page',
+    accessorFn: vector => vector.pageNumber ?? '—',
+    header: 'Page',
+    meta: { class: { td: 'whitespace-nowrap text-toned' } }
+  },
+  {
+    accessorKey: 'sourceFilename',
+    header: 'File',
+    meta: { class: { td: 'max-w-56' } }
+  },
+  {
+    accessorKey: 'textPreview',
+    header: 'Content',
+    meta: { class: { td: 'max-w-xl truncate text-toned' } }
+  },
+  {
+    id: 'indexedAt',
+    accessorFn: vector => formatDate(vector.indexedAt),
+    header: 'Indexed',
+    meta: { class: { td: 'whitespace-nowrap text-toned' } }
+  }
 ]
 const fileColumns: TableColumn<LibraryFile>[] = [
   { accessorKey: 'originalName', header: 'File' },
@@ -180,7 +193,12 @@ const fileColumns: TableColumn<LibraryFile>[] = [
     header: 'Uploaded',
     meta: { class: { td: 'whitespace-nowrap text-toned' } }
   },
-  { accessorKey: 'status', header: 'Status' }
+  { accessorKey: 'status', header: 'Status' },
+  {
+    id: 'actions',
+    header: 'Action',
+    meta: { class: { th: 'text-right', td: 'text-right' } }
+  }
 ]
 
 watch(files, (nextFiles) => {
@@ -191,13 +209,34 @@ watch(files, (nextFiles) => {
 
   if (!nextFiles.some(file => file.id === selectedFileId.value)) {
     selectedFileId.value = nextFiles[0]!.id
+    if (props.view === 'rag-database') vectorPage.value = 1
   }
 }, { immediate: true })
 
-watch(selectedFileId, () => {
-  if (import.meta.client && selectedFileId.value) {
-    void loadVectors(true)
+watch([selectedFileId, vectorPage], ([fileId, page], [previousFileId]) => {
+  if (!import.meta.client || !fileId) return
+
+  if (props.view === 'rag-database') {
+    if (previousFileId && fileId !== previousFileId && page !== 1) {
+      vectorPage.value = 1
+      return
+    }
+    syncRagRoute()
   }
+
+  void loadVectors(true)
+})
+
+watch(() => [route.query.file, route.query.page], ([fileQuery, pageQuery]) => {
+  if (props.view !== 'rag-database') return
+
+  const routeFileId = typeof fileQuery === 'string' ? fileQuery : ''
+  if (routeFileId && files.value.some(file => file.id === routeFileId) && routeFileId !== selectedFileId.value) {
+    selectedFileId.value = routeFileId
+  }
+
+  const routePage = parsePageQuery(pageQuery)
+  if (routePage !== vectorPage.value) vectorPage.value = routePage
 })
 
 onMounted(() => {
@@ -222,6 +261,11 @@ function formatBytes(value: number | null | undefined): string {
   return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`
 }
 
+function parsePageQuery(value: unknown): number {
+  const page = typeof value === 'string' ? Number.parseInt(value, 10) : 1
+  return Number.isInteger(page) && page > 0 ? page : 1
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
   const date = new Date(value)
@@ -238,18 +282,35 @@ function previewValues(values: number[]): string {
   return `[${values.map(value => Number(value).toFixed(4)).join(', ')}${values.length >= 12 ? ', …' : ''}]`
 }
 
-function openFile(file: LibraryFile) {
-  void navigateTo(file.contentUrl, { external: true })
+function fileDownloadUrl(file: LibraryFile): string {
+  return `${file.contentUrl}?download=1`
 }
 
 function selectFile(_event: Event, row: TableRow<LibraryFile>) {
-  openFile(row.original)
+  void navigateTo({
+    path: '/rag-database',
+    query: { file: row.original.id }
+  })
+}
+
+function selectVector(_event: Event, row: TableRow<LibraryVector>) {
+  void navigateTo(`/rag-database/chunk/${encodeURIComponent(row.original.vectorId)}`)
+}
+
+function syncRagRoute() {
+  const query: Record<string, string> = { file: selectedFileId.value }
+  if (vectorPage.value > 1) query.page = String(vectorPage.value)
+
+  if (route.query.file === query.file && parsePageQuery(route.query.page) === vectorPage.value) return
+  void navigateTo({ path: '/rag-database', query }, { replace: true })
 }
 
 async function loadVectors(reset = false) {
   if (!selectedFileId.value || vectorsLoading.value) return
 
   const uploadId = selectedFileId.value
+  const requestedPage = vectorPage.value
+  const paginated = props.view === 'rag-database'
   vectorsLoading.value = true
   vectorsError.value = null
 
@@ -257,24 +318,34 @@ async function loadVectors(reset = false) {
     const response = await $fetch<VectorsResponse>('/api/library/vectors', {
       query: {
         uploadId,
-        limit: 20,
-        cursor: reset ? undefined : nextCursor.value ?? undefined
+        limit: paginated ? RAG_PAGE_SIZE : 20,
+        page: paginated ? requestedPage : undefined,
+        cursor: paginated || reset ? undefined : nextCursor.value ?? undefined
       }
     })
 
-    if (uploadId !== selectedFileId.value) return
+    if (uploadId !== selectedFileId.value || (paginated && requestedPage !== vectorPage.value)) return
+    const lastPage = Math.max(1, Math.ceil(response.total / RAG_PAGE_SIZE))
+    if (paginated && requestedPage > lastPage) {
+      vectorPage.value = lastPage
+      return
+    }
 
-    vectors.value = reset
+    vectors.value = paginated || reset
       ? response.items
       : [...vectors.value, ...response.items.map(item => ({ ...item, projection: null }))]
     nextCursor.value = response.nextCursor
-    hasMoreVectors.value = response.hasMore
+    hasMoreVectors.value = paginated ? false : response.hasMore
+    vectorTotal.value = response.total
   } catch (error) {
     vectorsError.value = error instanceof Error ? error.message : 'Unable to load vector records.'
-    if (reset) vectors.value = []
+    if (paginated || reset) {
+      vectors.value = []
+      vectorTotal.value = 0
+    }
   } finally {
     vectorsLoading.value = false
-    if (uploadId !== selectedFileId.value && selectedFileId.value) {
+    if (selectedFileId.value && (uploadId !== selectedFileId.value || (paginated && requestedPage !== vectorPage.value))) {
       void loadVectors(true)
     }
   }
@@ -395,16 +466,12 @@ async function refreshLibrary() {
               @select="selectFile"
             >
               <template #originalName-cell="{ row }">
-                <a
-                  :href="row.original.contentUrl"
-                  class="flex min-w-0 items-center gap-3 rounded-sm outline-primary focus-visible:outline-2"
-                  :aria-label="`Open ${row.original.originalName}`"
-                >
+                <div class="flex min-w-0 items-center gap-3">
                   <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-error/10 text-error">
                     <UIcon name="i-lucide-file-type-2" class="size-4" />
                   </span>
                   <span class="max-w-64 truncate font-medium text-highlighted">{{ row.original.originalName }}</span>
-                </a>
+                </div>
               </template>
 
               <template #status-cell="{ row }">
@@ -412,6 +479,20 @@ async function refreshLibrary() {
                   :color="row.original.status === 'ready' ? 'success' : 'warning'"
                   variant="soft"
                   :label="row.original.status.toUpperCase()"
+                />
+              </template>
+
+              <template #actions-cell="{ row }">
+                <UButton
+                  :to="fileDownloadUrl(row.original)"
+                  external
+                  label="Download"
+                  icon="i-lucide-download"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  :aria-label="`Download ${row.original.originalName}`"
+                  @click.stop
                 />
               </template>
             </UTable>
@@ -566,14 +647,69 @@ async function refreshLibrary() {
               class="mb-4"
             />
 
-            <UTable
-              v-if="props.view === 'rag-database'"
-              :data="semanticIndexRows"
-              :columns="semanticIndexColumns"
-              :loading="indexStatus === 'pending'"
-              empty="No semantic index metadata available."
-              class="overflow-hidden rounded-xl border border-default bg-default"
-            />
+            <template v-if="props.view === 'rag-database'">
+              <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div class="w-full sm:max-w-sm">
+                  <label for="rag-file-filter" class="mb-1.5 block text-sm font-medium text-highlighted">
+                    File
+                  </label>
+                  <USelect
+                    id="rag-file-filter"
+                    v-model="selectedFileId"
+                    :items="fileFilterItems"
+                    value-key="value"
+                    icon="i-lucide-file-text"
+                    placeholder="Select a file"
+                    :disabled="!fileFilterItems.length"
+                    class="w-full"
+                  />
+                </div>
+                <span class="text-sm text-muted">
+                  {{ vectorTotal.toLocaleString() }} chunk{{ vectorTotal === 1 ? '' : 's' }}
+                </span>
+              </div>
+
+              <UTable
+                :data="vectors"
+                :columns="vectorColumns"
+                :loading="vectorsLoading"
+                empty="No indexed chunks available."
+                class="overflow-hidden rounded-xl border border-default bg-default"
+                :ui="{ tr: 'data-[selectable=true]:cursor-pointer' }"
+                @select="selectVector"
+              >
+                <template #chunkIndex-cell="{ row }">
+                  <span class="font-medium text-highlighted">Chunk {{ row.original.chunkIndex }}</span>
+                </template>
+
+                <template #sourceFilename-cell="{ row }">
+                  <a
+                    :href="row.original.sourceFileUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="block truncate font-medium text-primary hover:underline"
+                    :aria-label="`Open source file ${row.original.sourceFilename}`"
+                    @click.stop
+                  >
+                    {{ row.original.sourceFilename }}
+                  </a>
+                </template>
+              </UTable>
+
+              <div v-if="vectorTotal" class="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-sm text-muted">
+                  Showing {{ vectorPageStart }}–{{ vectorPageEnd }} of {{ vectorTotal.toLocaleString() }} chunks
+                </p>
+                <UPagination
+                  v-if="vectorTotal > RAG_PAGE_SIZE"
+                  v-model:page="vectorPage"
+                  :total="vectorTotal"
+                  :items-per-page="RAG_PAGE_SIZE"
+                  size="sm"
+                  :disabled="vectorsLoading"
+                />
+              </div>
+            </template>
 
             <template v-else>
               <div v-if="indexStatus === 'pending' && !indexResponse" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -617,7 +753,7 @@ async function refreshLibrary() {
             </template>
 
             <LibraryEmbeddingProjection
-              v-if="indexResponse?.index && vectors.length"
+              v-if="props.view === 'all' && indexResponse?.index && vectors.length"
               :vectors="vectors"
               :model="indexResponse.index.embeddingModel"
               :dimensions="indexResponse.index.dimensions"
@@ -634,7 +770,7 @@ async function refreshLibrary() {
               class="mt-4"
             />
 
-            <div class="mt-5 space-y-3">
+            <div v-if="props.view === 'all'" class="mt-5 space-y-3">
               <article
                 v-for="vector in vectors"
                 :key="vector.vectorId"

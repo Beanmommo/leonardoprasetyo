@@ -17,6 +17,12 @@ interface PortfolioCitation {
   textPreview?: string
 }
 
+interface CitationGroup {
+  key: string
+  label: string
+  url: string
+}
+
 type PortfolioMessage = UIMessage<unknown, { citations: PortfolioCitation[] }>
 
 const route = useRoute()
@@ -84,24 +90,77 @@ function getCitations(message: UIMessage): PortfolioCitation[] {
 }
 
 function citationPage(citation: PortfolioCitation): number | undefined {
-  return citation.pageNumber ?? citation.page
+  const page = citation.pageNumber ?? citation.page
+  return Number.isSafeInteger(page) && Number(page) > 0 ? page : undefined
 }
 
-function citationLabel(citation: PortfolioCitation): string {
-  const filename = citation.sourceFilename ?? citation.filename ?? 'Resume'
-  const page = citationPage(citation)
-  return page ? `${filename} · page ${page}` : filename
+function citationFilename(citation: PortfolioCitation): string {
+  return citation.sourceFilename ?? citation.filename ?? 'Resume'
 }
 
-function citationUrl(citation: PortfolioCitation): string {
-  const page = citationPage(citation)
+function citationUrl(citation: PortfolioCitation, page = citationPage(citation)): string {
   const candidate = citation.contentUrl
     ?? citation.url
     ?? (citation.uploadId ? `/api/library/files/${encodeURIComponent(citation.uploadId)}/content` : '/library')
-  const base = candidate === '/library' || candidate.startsWith('/api/library/files/')
-    ? candidate
+  const candidateWithoutFragment = candidate.split('#', 1)[0]!
+  const base = candidateWithoutFragment === '/library' || candidateWithoutFragment.startsWith('/api/library/files/')
+    ? candidateWithoutFragment
     : '/library'
-  return page && !base.includes('#') ? `${base}#page=${page}` : base
+  return page && base !== '/library' ? `${base}#page=${page}` : base
+}
+
+function formatCitationPages(pages: number[]): string {
+  if (!pages.length) return ''
+
+  const sortedPages = [...new Set(pages)].sort((left, right) => left - right)
+  const labels: string[] = []
+  let rangeStart = sortedPages[0]!
+  let rangeEnd = rangeStart
+
+  for (const page of sortedPages.slice(1)) {
+    if (page === rangeEnd + 1) {
+      rangeEnd = page
+      continue
+    }
+
+    labels.push(rangeStart === rangeEnd ? `p${rangeStart}` : `p[${rangeStart}-${rangeEnd}]`)
+    rangeStart = page
+    rangeEnd = page
+  }
+
+  labels.push(rangeStart === rangeEnd ? `p${rangeStart}` : `p[${rangeStart}-${rangeEnd}]`)
+  return labels.join(', ')
+}
+
+function getCitationGroups(message: UIMessage): CitationGroup[] {
+  const groups = new Map<string, {
+    citation: PortfolioCitation
+    filename: string
+    pages: number[]
+  }>()
+
+  for (const citation of getCitations(message)) {
+    const filename = citationFilename(citation)
+    const sourceUrl = citationUrl(citation).split('#', 1)[0]!
+    const key = citation.uploadId
+      ? `upload:${citation.uploadId}`
+      : `source:${sourceUrl}:${filename}`
+    const group = groups.get(key) ?? { citation, filename, pages: [] }
+    const page = citationPage(citation)
+
+    if (page) group.pages.push(page)
+    groups.set(key, group)
+  }
+
+  return Array.from(groups, ([key, group]) => {
+    const pages = [...new Set(group.pages)].sort((left, right) => left - right)
+    const pageLabel = formatCitationPages(pages)
+    return {
+      key,
+      label: pageLabel ? `${group.filename} ${pageLabel}` : group.filename,
+      url: citationUrl(group.citation, pages[0])
+    }
+  })
 }
 
 function requestMessages(messages: PortfolioMessage[]) {
@@ -365,13 +424,14 @@ function vote(message: UIMessage, isUpvoted: boolean) {
               @cancel-edit="editingMessageId = null"
             />
 
-            <div v-if="getCitations(message).length" class="mt-3 flex flex-wrap gap-2">
+            <div v-if="getCitationGroups(message).length" class="mt-3 flex flex-wrap gap-2">
               <UButton
-                v-for="(citation, index) in getCitations(message)"
-                :key="citation.id ?? `${message.id}-${index}`"
-                :to="citationUrl(citation)"
+                v-for="citationGroup in getCitationGroups(message)"
+                :key="citationGroup.key"
+                :to="citationGroup.url"
                 target="_blank"
-                :label="citationLabel(citation)"
+                rel="noopener noreferrer"
+                :label="citationGroup.label"
                 icon="i-lucide-file-search"
                 trailing-icon="i-lucide-arrow-up-right"
                 color="neutral"
