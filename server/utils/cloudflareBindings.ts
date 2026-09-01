@@ -55,6 +55,8 @@ type CloudflareEventContext = {
   }
 }
 
+export type CloudflareBindingSource = H3Event | Readonly<CloudflareRuntimeBindings>
+
 type CloudflareGlobal = typeof globalThis & {
   __env__?: CloudflareRuntimeBindings
 }
@@ -85,19 +87,27 @@ function processEnvironment(): CloudflareRuntimeBindings {
   }
 }
 
-export function getCloudflareBindings(event?: H3Event): Readonly<CloudflareRuntimeBindings> {
-  const eventContext = event?.context as CloudflareEventContext | undefined
+function isH3Event(source: CloudflareBindingSource): source is H3Event {
+  return 'context' in source && 'node' in source
+}
+
+export function getCloudflareBindings(source?: CloudflareBindingSource): Readonly<CloudflareRuntimeBindings> {
+  const eventContext = source && isH3Event(source)
+    ? source.context as CloudflareEventContext
+    : undefined
+  const explicitEnv = source && !isH3Event(source) ? source : undefined
   const globalEnv = (globalThis as CloudflareGlobal).__env__
 
   return {
     ...processEnvironment(),
     ...globalEnv,
+    ...explicitEnv,
     ...eventContext?.cloudflare?.env
   }
 }
 
-export function requireCloudflareBinding<Name extends BindingName>(event: H3Event, name: Name): NonNullable<CloudflareRuntimeBindings[Name]> {
-  const binding = getCloudflareBindings(event)[name]
+export function requireCloudflareBinding<Name extends BindingName>(source: CloudflareBindingSource, name: Name): NonNullable<CloudflareRuntimeBindings[Name]> {
+  const binding = getCloudflareBindings(source)[name]
   if (!binding) {
     throw createError({
       statusCode: 503,
@@ -107,13 +117,13 @@ export function requireCloudflareBinding<Name extends BindingName>(event: H3Even
   return binding as NonNullable<CloudflareRuntimeBindings[Name]>
 }
 
-export function getCloudflareSecret(event: H3Event, name: SecretName): string | undefined {
-  const value = getCloudflareBindings(event)[name]
+export function getCloudflareSecret(source: CloudflareBindingSource, name: SecretName): string | undefined {
+  const value = getCloudflareBindings(source)[name]
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-export function getCloudflareConfig(event?: H3Event): CloudflareConfig {
-  const env = getCloudflareBindings(event)
+export function getCloudflareConfig(source?: CloudflareBindingSource): CloudflareConfig {
+  const env = getCloudflareBindings(source)
   const dimensions = Number.parseInt(env.EMBEDDING_DIMENSIONS || CONFIG_DEFAULTS.EMBEDDING_DIMENSIONS, 10)
   const dailyLimit = Number.parseInt(env.QUESTION_DAILY_LIMIT || CONFIG_DEFAULTS.QUESTION_DAILY_LIMIT, 10)
   const metric = env.VECTORIZE_METRIC || CONFIG_DEFAULTS.VECTORIZE_METRIC

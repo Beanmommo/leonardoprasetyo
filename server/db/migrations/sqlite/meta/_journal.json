@@ -50,6 +50,13 @@
       "when": 1788144319701,
       "tag": "0006_lazy_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788232198694,
+      "tag": "0007_worried_grim_reaper",
+      "breakpoints": true
     }
   ]
 }

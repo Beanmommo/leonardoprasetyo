@@ -62,33 +62,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Library upload not found' })
     }
 
-    const taskId = crypto.randomUUID()
-    const now = new Date()
-    const [task] = await db.insert(schema.indexingTasks).values({
-      id: taskId,
-      uploadId,
-      workflowInstanceId: taskId,
-      status: 'queued',
-      stage: 'queued',
-      progressCurrent: 0,
-      attempt: 0,
-      createdAt: now,
-      updatedAt: now
-    }).returning()
-    if (!task) {
-      throw new Error('D1 did not return the queued indexing task')
-    }
-
-    try {
-      const workflow = requireCloudflareBinding(event, 'INDEXING_WORKFLOW')
-      await workflow.create({
-        id: taskId,
-        params: { taskId, uploadId }
-      })
-    } catch (error) {
-      await failIndexingTask(taskId, error)
-      throw error
-    }
+    const task = await queueIndexingTask(event, uploadId)
 
     setResponseStatus(event, 202)
     return {

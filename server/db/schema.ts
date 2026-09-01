@@ -85,6 +85,7 @@ export const uploads = sqliteTable('uploads', {
   contentType: text('content_type').notNull(),
   sizeBytes: integer('size_bytes').notNull(),
   checksumSha256: text('checksum_sha256').notNull(),
+  role: text('role', { enum: ['resume', 'document'] }).notNull().default('document'),
   status: text('status', { enum: ['uploaded', 'processing', 'ready', 'failed', 'deleted'] }).notNull().default('uploaded'),
   errorMessage: text('error_message'),
   isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(true),
@@ -99,7 +100,8 @@ export const uploads = sqliteTable('uploads', {
 }, table => [
   uniqueIndex('uploads_r2_key_idx').on(table.r2Key),
   uniqueIndex('uploads_checksum_idx').on(table.checksumSha256),
-  uniqueIndex('uploads_one_active_idx').on(table.isActive).where(sql`${table.isActive} = 1`),
+  uniqueIndex('uploads_one_resume_idx').on(table.role).where(sql`${table.role} = 'resume' AND ${table.status} <> 'deleted'`),
+  index('uploads_role_status_idx').on(table.role, table.status, table.isActive),
   index('uploads_public_status_idx').on(table.isPublic, table.status, table.isActive),
   index('uploads_created_idx').on(table.createdAt),
   check('uploads_size_nonnegative', sql`${table.sizeBytes} >= 0`),

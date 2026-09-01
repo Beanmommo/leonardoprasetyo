@@ -1,5 +1,5 @@
 import { db, schema } from 'hub:db'
-import { count, desc, eq, ne } from 'drizzle-orm'
+import { and, count, desc, eq, ne } from 'drizzle-orm'
 
 export default defineEventHandler(async (event) => {
   setResponseHeader(event, 'Cache-Control', 'no-store')
@@ -7,7 +7,10 @@ export default defineEventHandler(async (event) => {
 
   const bucket = requireCloudflareBinding(event, 'BLOB')
   const uploads = await db.query.uploads.findMany({
-    where: () => ne(schema.uploads.status, 'deleted'),
+    where: () => and(
+      eq(schema.uploads.role, 'document'),
+      ne(schema.uploads.status, 'deleted')
+    ),
     orderBy: () => desc(schema.uploads.updatedAt),
     limit: 100
   })

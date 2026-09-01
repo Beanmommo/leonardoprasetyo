@@ -8,6 +8,7 @@ export type LibraryFile = {
   contentType: string
   sizeBytes: number
   checksumSha256: string
+  role: UploadRow['role']
   status: UploadRow['status']
   pageCount: number | null
   chunkCount: number
@@ -34,13 +35,16 @@ export function serializeLibraryFile(upload: UploadRow, object: R2Object | null,
     contentType: upload.contentType,
     sizeBytes: upload.sizeBytes,
     checksumSha256: upload.checksumSha256,
+    role: upload.role,
     status: upload.status,
     pageCount: upload.pageCount,
     chunkCount,
     indexedAt: dateToIso(upload.indexedAt),
     createdAt: upload.createdAt.toISOString(),
     updatedAt: upload.updatedAt.toISOString(),
-    contentUrl: `/api/library/files/${upload.id}/content`,
+    contentUrl: upload.role === 'resume'
+      ? '/api/library/resume/content'
+      : `/api/library/files/${upload.id}/content`,
     r2: object
       ? {
           key: object.key,

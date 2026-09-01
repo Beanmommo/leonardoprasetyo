@@ -15,8 +15,11 @@
     "cloudflare:types": "wrangler types --config .output/server/wrangler.json",
     "cloudflare:dry-run": "wrangler deploy --dry-run --config .output/server/wrangler.json",
     "cloudflare:migrate:dev": "wrangler d1 migrations apply leonardoprasetyo-dev --remote --config .output/server/wrangler.json",
-    "cloudflare:migrate": "wrangler d1 migrations apply leonardoprasetyo-prod --remote --config .output/server/wrangler.json",
-    "cloudflare:deploy": "pnpm build && pnpm cloudflare:migrate && wrangler deploy --config .output/server/wrangler.json"
+    "cloudflare:migrate:prod": "wrangler d1 migrations apply leonardoprasetyo-prod --remote --config .output/server/wrangler.json",
+    "cloudflare:migrate": "pnpm cloudflare:migrate:prod",
+    "cloudflare:deploy:dev": "CLOUDFLARE_DEPLOY_ENV=dev pnpm build && pnpm cloudflare:migrate:dev && wrangler deploy --config .output/server/wrangler.json",
+    "cloudflare:deploy:prod": "CLOUDFLARE_DEPLOY_ENV=prod pnpm build && pnpm cloudflare:migrate:prod && wrangler deploy --config .output/server/wrangler.json",
+    "cloudflare:deploy": "pnpm cloudflare:deploy:prod"
   },
   "dependencies": {
     "@ai-sdk/vue": "^4.0.77",
@@ -41,6 +44,7 @@
     "nuxt-auth-utils": "^0.5.30",
     "nuxt-charts": "^2.2.1",
     "nuxt-csurf": "^1.6.6",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "shiki": "^4.4.3",
     "striptags": "3.2.0",

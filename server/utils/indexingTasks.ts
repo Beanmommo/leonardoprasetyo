@@ -1,5 +1,7 @@
 import { db, schema } from 'hub:db'
 import { eq, sql } from 'drizzle-orm'
+import { requireCloudflareBinding } from './cloudflareBindings'
+import type { CloudflareBindingSource } from './cloudflareBindings'
 import type { DocumentIngestionResult } from './documentIngestion'
 
 type IndexingTaskRow = typeof schema.indexingTasks.$inferSelect
@@ -66,6 +68,52 @@ export function serializeIndexingTask(task: IndexingTaskRow, originalName: strin
   }
 }
 
+export async function queueIndexingTask(
+  source: CloudflareBindingSource,
+  uploadId: string
+): Promise<IndexingTaskRow> {
+  const taskId = crypto.randomUUID()
+  const now = new Date()
+  const [task] = await db.insert(schema.indexingTasks).values({
+    id: taskId,
+    uploadId,
+    workflowInstanceId: taskId,
+    status: 'queued',
+    stage: 'queued',
+    progressCurrent: 0,
+    attempt: 0,
+    createdAt: now,
+    updatedAt: now
+  }).returning()
+  if (!task) {
+    throw new Error('D1 did not return the queued indexing task')
+  }
+
+  try {
+    const workflow = requireCloudflareBinding(source, 'INDEXING_WORKFLOW')
+    await workflow.create({
+      id: taskId,
+      params: { taskId, uploadId }
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      await failIndexingTask(taskId, `Cloudflare Workflow dispatch failed: ${message}`)
+    } catch (recordError) {
+      console.error(JSON.stringify({
+        message: 'Could not record Library indexing Workflow dispatch failure',
+        taskId,
+        uploadId,
+        workflowError: message,
+        error: recordError instanceof Error ? recordError.message : String(recordError)
+      }))
+    }
+    throw error
+  }
+
+  return task
+}
+
 export async function startIndexingTask(taskId: string): Promise<void> {
   const task = await db.query.indexingTasks.findFirst({
     where: () => eq(schema.indexingTasks.id, taskId)
@@ -122,10 +170,17 @@ export async function completeIndexingTask(taskId: string, result: DocumentInges
 export async function failIndexingTask(taskId: string, error: unknown): Promise<void> {
   const now = new Date()
   const message = error instanceof Error ? error.message : String(error)
-  await db.update(schema.indexingTasks).set({
+  const [failedTask] = await db.update(schema.indexingTasks).set({
     status: 'failed',
+    stage: 'failed',
     errorMessage: message.slice(0, 1000),
     completedAt: now,
     updatedAt: now
-  }).where(eq(schema.indexingTasks.id, taskId))
+  }).where(eq(schema.indexingTasks.id, taskId)).returning({
+    id: schema.indexingTasks.id
+  })
+
+  if (!failedTask) {
+    throw new Error('Indexing task not found while recording failure')
+  }
 }

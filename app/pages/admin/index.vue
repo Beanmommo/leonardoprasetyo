@@ -88,13 +88,14 @@ type StoredResume = {
 type ResumeResponse = {
   resume: StoredResume | null
   fallbackUrl?: string
+  task?: AdminIndexingTask
 }
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024
 
 useSeoMeta({
   title: 'Library Administration | Leonardo Prasetyo',
-  description: 'Private document ingestion and deletion controls.',
+  description: 'Private document ingestion, indexing, and deletion controls.',
   robots: 'noindex, nofollow'
 })
 
@@ -216,8 +217,8 @@ const taskStageLabels: Record<AdminIndexingTask['stage'], string> = {
   saving_chunks: 'Saving chunk metadata',
   publishing_vectors: 'Publishing vectors',
   verifying_vectors: 'Verifying vectors',
-  activating_document: 'Activating document',
-  cleaning_previous: 'Cleaning previous revision',
+  activating_document: 'Publishing source',
+  cleaning_previous: 'Finalizing source',
   complete: 'Complete',
   failed: 'Failed'
 }
@@ -360,6 +361,10 @@ async function uploadResume() {
   if (!file || resumeUploading.value) return
 
   resumeUploading.value = true
+  const modal = uploadModal.open({
+    filename: file.name,
+    state: 'uploading'
+  })
   try {
     const response = await $fetch<ResumeResponse>('/api/admin/library/resume', {
       method: 'PUT',
@@ -369,23 +374,41 @@ async function uploadResume() {
         'x-filename': encodeURIComponent(file.name)
       }
     })
+    if (!response.task) {
+      throw new Error('The resume upload did not return an indexing task')
+    }
     resume.value = response.resume
     selectedResumeFile.value = null
     if (resumeInput.value) resumeInput.value.value = ''
+    uploadModal.patch({
+      state: 'complete',
+      taskId: response.task.id
+    })
     toast.add({
-      title: 'Resume published',
-      description: `${file.name} now opens from the Resume sidebar link.`,
+      title: 'Resume published and queued',
+      description: `${file.name} is now the downloadable resume and is being indexed for RAG.`,
       color: 'success',
       icon: 'i-lucide-circle-check'
     })
+    await loadTasks()
+
+    const action = await modal.result
+    if (action === 'view') {
+      await navigateTo(`/admin/task/${response.task.id}`)
+    }
   } catch (error) {
+    uploadModal.patch({
+      state: 'error',
+      errorMessage: errorMessage(error, 'The resume PDF could not be uploaded and queued for indexing.')
+    })
     toast.add({
       title: 'Resume upload failed',
-      description: errorMessage(error, 'The resume PDF could not be uploaded.'),
+      description: errorMessage(error, 'The resume PDF could not be uploaded and queued for indexing.'),
       color: 'error',
       icon: 'i-lucide-circle-alert'
     })
-    await loadResume()
+    await Promise.all([loadResume(), loadTasks()])
+    await modal.result
   } finally {
     resumeUploading.value = false
   }
@@ -583,7 +606,7 @@ async function signOut() {
                   Library administration
                 </h1>
                 <p class="mt-3 max-w-2xl leading-7 text-toned">
-                  Publish the downloadable resume, upload a PDF as a new RAG generation, or permanently delete a document and its stored chunks.
+                  Publish the downloadable resume, add independent PDF sources to RAG, or permanently delete a document and its stored chunks.
                 </p>
               </div>
               <div class="flex items-center gap-3 rounded-xl border border-default bg-default px-3 py-2">
@@ -607,7 +630,7 @@ async function signOut() {
                       Resume PDF
                     </h2>
                     <p class="mt-1 text-sm text-muted">
-                      Replaces the PDF opened from the Resume sidebar link. This does not change the RAG index.
+                      Replaces the PDF opened from the Resume sidebar link and indexes it as the dedicated resume RAG source.
                     </p>
                   </div>
                   <UButton
@@ -684,7 +707,7 @@ async function signOut() {
                     Publish RAG document
                   </h2>
                   <p class="mt-1 text-sm text-muted">
-                    Maximum 10 MiB. Publishing replaces the currently active document after the new vectors are queryable.
+                    Maximum 10 MiB. Each published PDF becomes an additional document source for RAG.
                   </p>
                 </div>
               </template>
