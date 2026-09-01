@@ -3,6 +3,11 @@ const isProductionBuild = process.env.NODE_ENV === 'production'
 const isBuildCommand = process.env.npm_lifecycle_event === 'build'
   || process.argv.includes('build')
 const isCloudflareLocalDev = process.env.CLOUDFLARE_LOCAL_DEV === '1'
+const cloudflareDeployEnvironment = process.env.CLOUDFLARE_DEPLOY_ENV || 'prod'
+if (cloudflareDeployEnvironment !== 'dev' && cloudflareDeployEnvironment !== 'prod') {
+  throw new Error('CLOUDFLARE_DEPLOY_ENV must be dev or prod')
+}
+const usesCloudflareDevResources = isCloudflareLocalDev || cloudflareDeployEnvironment === 'dev'
 const configuredCloudflareDatabaseId = process.env.NUXT_HUB_CLOUDFLARE_DATABASE_ID
 const configuredDevCloudflareDatabaseId = process.env.NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID
 const configuredDevVectorizeIndex = process.env.VECTORIZE_DEV_INDEX_NAME
@@ -11,7 +16,7 @@ const cloudflareDatabaseIdPattern = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0
 if (
   isProductionBuild
   && isBuildCommand
-  && !isCloudflareLocalDev
+  && !usesCloudflareDevResources
   && (
     !configuredCloudflareDatabaseId
     || !cloudflareDatabaseIdPattern.test(configuredCloudflareDatabaseId)
@@ -24,29 +29,32 @@ if (
 if (
   isProductionBuild
   && isBuildCommand
-  && isCloudflareLocalDev
+  && usesCloudflareDevResources
   && (
     !configuredDevCloudflareDatabaseId
     || !cloudflareDatabaseIdPattern.test(configuredDevCloudflareDatabaseId)
     || /^0+$/.test(configuredDevCloudflareDatabaseId.replaceAll('-', ''))
   )
 ) {
-  throw new Error('NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID must be the development D1 UUID for dev:local')
+  throw new Error('NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID must be a real D1 UUID for development builds')
 }
 
-const cloudflareDatabaseId = isCloudflareLocalDev
+const cloudflareDatabaseId = usesCloudflareDevResources
   ? configuredDevCloudflareDatabaseId || '00000000-0000-0000-0000-000000000000'
   : configuredCloudflareDatabaseId || '00000000-0000-0000-0000-000000000000'
-const cloudflareDatabaseName = isCloudflareLocalDev
+const cloudflareWorkerName = usesCloudflareDevResources
+  ? 'leonardoprasetyo-dev'
+  : 'leonardoprasetyo'
+const cloudflareDatabaseName = usesCloudflareDevResources
   ? 'leonardoprasetyo-dev'
   : 'leonardoprasetyo-prod'
-const cloudflareBucketName = isCloudflareLocalDev
+const cloudflareBucketName = usesCloudflareDevResources
   ? 'leonardoprasetyo-uploads-dev'
   : 'leonardoprasetyo-uploads-prod'
-const cloudflareVectorizeIndex = isCloudflareLocalDev
+const cloudflareVectorizeIndex = usesCloudflareDevResources
   ? configuredDevVectorizeIndex || 'leonardoprasetyo-documents-dev'
   : 'leonardoprasetyo-documents-prod'
-const cloudflareIndexingWorkflowName = isCloudflareLocalDev
+const cloudflareIndexingWorkflowName = usesCloudflareDevResources
   ? 'leonardoprasetyo-library-indexing-dev'
   : 'leonardoprasetyo-library-indexing-prod'
 const remoteCloudflareBinding = isCloudflareLocalDev ? { remote: true } as const : {}
@@ -105,7 +113,7 @@ export default defineNuxtConfig({
       nodeCompat: true,
       wrangler: {
         ...requiredCloudflareSecrets,
-        name: 'leonardoprasetyo',
+        name: cloudflareWorkerName,
         compatibility_date: '2026-08-29',
         compatibility_flags: ['nodejs_compat'],
         ai: {

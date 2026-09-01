@@ -1,8 +1,8 @@
-import type { H3Event } from 'h3'
 import { db, schema } from 'hub:db'
 import { and, count, eq, exists, gt, lte, ne } from 'drizzle-orm'
 import { createWorkersAiEmbedding } from './workersAiEmbedding'
 import { getCloudflareConfig, requireCloudflareBinding } from './cloudflareBindings'
+import type { CloudflareBindingSource } from './cloudflareBindings'
 import type { IndexingTaskProgress } from './indexingTasks'
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024
@@ -14,8 +14,11 @@ const VECTOR_BATCH_SIZE = 100
 // inserts 15 columns, so six rows (90 parameters) is the largest safe batch.
 const DB_BATCH_SIZE = 6
 const EMBEDDING_CONCURRENCY = 3
-const VECTOR_VISIBILITY_TIMEOUT_MS = 30_000
-const VECTOR_VISIBILITY_POLL_MS = 500
+// Vectorize mutations are asynchronous. A busy remote development index can
+// take longer than the typical few seconds to expose an accepted upsert, so do
+// not roll back a valid generation after only 30 seconds.
+const VECTOR_VISIBILITY_TIMEOUT_MS = 2 * 60 * 1000
+const VECTOR_VISIBILITY_POLL_MS = 1_000
 // Keep the persisted lease key compatible with the existing D1 constraint.
 // The lease protects publication of any Library document, not only resumes.
 const DOCUMENT_INGESTION_LEASE_NAME = 'resume-publication'
@@ -36,12 +39,6 @@ type PreparedChunk = {
   charEnd: number | null
   tokenCount: number
   contentHash: string
-}
-
-type PreviousUpload = {
-  id: string
-  r2Key: string
-  ingestionId: string | null
 }
 
 type DocumentIngestionLease = {
@@ -166,8 +163,8 @@ function splitMarkdownPages(markdown: string): ExtractedPage[] {
     .map((text, index) => ({ pageNumber: index + 1, text }))
 }
 
-async function extractWithCloudflare(event: H3Event, name: string, blob: Blob): Promise<ExtractedPage[]> {
-  const ai = requireCloudflareBinding(event, 'AI')
+async function extractWithCloudflare(source: CloudflareBindingSource, name: string, blob: Blob): Promise<ExtractedPage[]> {
+  const ai = requireCloudflareBinding(source, 'AI')
   const result = await ai.toMarkdown({ name, blob }, {
     conversionOptions: {
       output: { format: 'markdown' },
@@ -181,7 +178,7 @@ async function extractWithCloudflare(event: H3Event, name: string, blob: Blob): 
   return splitMarkdownPages(result.data)
 }
 
-async function extractPdf(event: H3Event, name: string, blob: Blob): Promise<{
+async function extractPdf(source: CloudflareBindingSource, name: string, blob: Blob): Promise<{
   pages: ExtractedPage[]
   method: DocumentIngestionResult['extractionMethod']
 }> {
@@ -199,7 +196,7 @@ async function extractPdf(event: H3Event, name: string, blob: Blob): Promise<{
       message: 'pdf-parse failed; using Cloudflare Markdown conversion',
       error: errorMessage(error)
     }))
-    const pages = await extractWithCloudflare(event, name, blob)
+    const pages = await extractWithCloudflare(source, name, blob)
     if (pages.length === 0) {
       throw new Error('No text could be extracted from the PDF', { cause: error })
     }
@@ -471,61 +468,14 @@ async function releaseDocumentIngestionLease(lease: DocumentIngestionLease): Pro
   ))
 }
 
-async function cleanupPreviousUploads(
-  vectorize: Vectorize,
-  bucket: R2Bucket,
-  previousUploads: PreviousUpload[],
-  lease: DocumentIngestionLease
-): Promise<void> {
-  for (const previous of previousUploads) {
-    try {
-      await renewDocumentIngestionLease(lease)
-      const previousChunks = await db.select({ vectorId: schema.documentChunks.vectorId })
-        .from(schema.documentChunks)
-        .where(and(
-          eq(schema.documentChunks.uploadId, previous.id),
-          eq(schema.documentChunks.ingestionId, previous.ingestionId || 'legacy')
-        ))
-      await deleteVectors(vectorize, previousChunks.map(chunk => chunk.vectorId))
-      await renewDocumentIngestionLease(lease)
-      await bucket.delete(previous.r2Key)
-      const now = new Date()
-      await db.delete(schema.documentChunks).where(and(
-        eq(schema.documentChunks.uploadId, previous.id),
-        eq(schema.documentChunks.ingestionId, previous.ingestionId || 'legacy'),
-        leaseOwnershipCondition(lease, now)
-      ))
-      await db.update(schema.uploads).set({
-        status: 'deleted',
-        isActive: false,
-        deletedAt: new Date(),
-        updatedAt: new Date()
-      }).where(and(
-        eq(schema.uploads.id, previous.id),
-        eq(schema.uploads.isActive, false),
-        leaseOwnershipCondition(lease, now)
-      ))
-    } catch (error) {
-      console.error(JSON.stringify({
-        message: 'Failed to clean up a previous Library document',
-        uploadId: previous.id,
-        error: errorMessage(error)
-      }))
-      if (error instanceof DocumentIngestionLeaseLostError) {
-        return
-      }
-    }
-  }
-}
-
 export async function ingestDocument(
-  event: H3Event,
+  source: CloudflareBindingSource,
   uploadId: string,
   options: DocumentIngestionOptions = {}
 ): Promise<DocumentIngestionResult> {
-  const bucket = requireCloudflareBinding(event, 'BLOB')
-  const vectorize = requireCloudflareBinding(event, 'VECTORIZE')
-  const config = getCloudflareConfig(event)
+  const bucket = requireCloudflareBinding(source, 'BLOB')
+  const vectorize = requireCloudflareBinding(source, 'VECTORIZE')
+  const config = getCloudflareConfig(source)
 
   const selectedUpload = await db.query.uploads.findFirst({
     where: () => eq(schema.uploads.id, uploadId)
@@ -641,7 +591,7 @@ export async function ingestDocument(
     await options.onProgress?.({ stage: 'extracting_text', current: 0, total: null })
     await renewDocumentIngestionLease(lease)
     const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' })
-    const extraction = await extractPdf(event, upload.originalName, pdfBlob)
+    const extraction = await extractPdf(source, upload.originalName, pdfBlob)
     const pages = validateExtractedPages(extraction.pages)
     await options.onProgress?.({
       stage: 'extracting_text',
@@ -673,7 +623,7 @@ export async function ingestDocument(
     const embeddings = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
       await renewDocumentIngestionLease(lease)
       const embedding = await createWorkersAiEmbedding(
-        event,
+        source,
         chunk.textContent,
         { kind: 'document', title: upload.originalName }
       )
@@ -699,12 +649,12 @@ export async function ingestDocument(
       chunkCount: chunks.length
     })
     await renewDocumentIngestionLease(lease)
+    // A terminal failure clears uploads.ingestion_id, so use every chunk row
+    // owned by this upload rather than relying on the last recorded generation.
+    // This also repairs remnants left by an interrupted retry.
     const previousChunkRows = await db.select({ vectorId: schema.documentChunks.vectorId })
       .from(schema.documentChunks)
-      .where(and(
-        eq(schema.documentChunks.uploadId, upload.id),
-        eq(schema.documentChunks.ingestionId, upload.ingestionId || 'legacy')
-      ))
+      .where(eq(schema.documentChunks.uploadId, upload.id))
     await deleteVectors(vectorize, previousChunkRows.map(row => row.vectorId))
     await renewDocumentIngestionLease(lease)
     const stagingTime = new Date()
@@ -773,9 +723,9 @@ export async function ingestDocument(
       })
     }
 
-    // Vectorize acknowledges writes before they are visible to queries. Keep
-    // the previous document active until every expected generation marker and
-    // content hash can be read back.
+    // Vectorize acknowledges writes before they are visible to queries. Do not
+    // publish this file generation until every expected marker and content hash
+    // can be read back.
     await options.onProgress?.({
       stage: 'verifying_vectors',
       current: 0,
@@ -800,8 +750,6 @@ export async function ingestDocument(
     )
 
     const indexedAt = new Date()
-    // Capture the old active document before switching the pointer. Its R2
-    // object and vectors remain available until the new revision is ready.
     await options.onProgress?.({
       stage: 'activating_document',
       current: chunks.length,
@@ -810,14 +758,6 @@ export async function ingestDocument(
       chunkCount: chunks.length
     })
     await renewDocumentIngestionLease(lease)
-    const previousUploads = await db.select({
-      id: schema.uploads.id,
-      r2Key: schema.uploads.r2Key,
-      ingestionId: schema.uploads.ingestionId
-    }).from(schema.uploads).where(and(
-      ne(schema.uploads.id, upload.id),
-      eq(schema.uploads.isActive, true)
-    ))
 
     preparedResult = {
       uploadId: upload.id,
@@ -831,38 +771,25 @@ export async function ingestDocument(
       alreadyIndexed: false
     }
 
-    // D1 batches are transactional: either the previous active pointer is
-    // cleared and this exact lease generation is published, or neither update
-    // is committed. The lease remains held through old-revision cleanup.
     await renewDocumentIngestionLease(lease)
     const finalizationTime = new Date()
     finalizationAttempted = true
-    await db.batch([
-      db.update(schema.uploads).set({
-        isActive: false,
-        updatedAt: indexedAt
-      }).where(and(
-        ne(schema.uploads.id, upload.id),
-        eq(schema.uploads.isActive, true),
-        leaseOwnershipCondition(lease, finalizationTime)
-      )),
-      db.update(schema.uploads).set({
-        status: 'ready',
-        isPublic: true,
-        isActive: true,
-        pageCount: pages.length,
-        vectorMutationId: vectorMutationIds.at(-1) || null,
-        indexedAt,
-        errorMessage: null,
-        deletedAt: null,
-        updatedAt: indexedAt
-      }).where(and(
-        eq(schema.uploads.id, upload.id),
-        eq(schema.uploads.status, 'processing'),
-        eq(schema.uploads.ingestionId, lease.ingestionId),
-        leaseOwnershipCondition(lease, finalizationTime)
-      ))
-    ])
+    await db.update(schema.uploads).set({
+      status: 'ready',
+      isPublic: true,
+      isActive: true,
+      pageCount: pages.length,
+      vectorMutationId: vectorMutationIds.at(-1) || null,
+      indexedAt,
+      errorMessage: null,
+      deletedAt: null,
+      updatedAt: indexedAt
+    }).where(and(
+      eq(schema.uploads.id, upload.id),
+      eq(schema.uploads.status, 'processing'),
+      eq(schema.uploads.ingestionId, lease.ingestionId),
+      leaseOwnershipCondition(lease, finalizationTime)
+    ))
 
     const finalized = await db.query.uploads.findFirst({
       where: () => eq(schema.uploads.id, upload.id)
@@ -877,11 +804,10 @@ export async function ingestDocument(
     await options.onProgress?.({
       stage: 'cleaning_previous',
       current: 0,
-      total: previousUploads.length,
+      total: 0,
       pageCount: pages.length,
       chunkCount: chunks.length
     })
-    await cleanupPreviousUploads(vectorize, bucket, previousUploads, lease)
     return preparedResult
   } catch (error) {
     if (published) {
@@ -977,12 +903,18 @@ export type DocumentDeletionResult = {
   alreadyDeleted: boolean
 }
 
-export async function deleteDocument(event: H3Event, uploadId: string): Promise<DocumentDeletionResult> {
+export async function deleteDocument(source: CloudflareBindingSource, uploadId: string): Promise<DocumentDeletionResult> {
   const existing = await db.query.uploads.findFirst({
     where: () => eq(schema.uploads.id, uploadId)
   })
   if (!existing) {
     throw createError({ statusCode: 404, statusMessage: 'Library upload not found' })
+  }
+  if (existing.role === 'resume') {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'The resume cannot be deleted as a document; replace it from the Resume PDF control'
+    })
   }
   if (existing.status === 'deleted') {
     return {
@@ -993,8 +925,8 @@ export async function deleteDocument(event: H3Event, uploadId: string): Promise<
     }
   }
 
-  const vectorize = requireCloudflareBinding(event, 'VECTORIZE')
-  const bucket = requireCloudflareBinding(event, 'BLOB')
+  const vectorize = requireCloudflareBinding(source, 'VECTORIZE')
+  const bucket = requireCloudflareBinding(source, 'BLOB')
   const lease = await acquireDocumentIngestionLease(uploadId)
 
   try {

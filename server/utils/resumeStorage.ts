@@ -1,3 +1,5 @@
+import { PDFDocument } from 'pdf-lib'
+
 export const RESUME_R2_KEY = 'library/public/resume/current.pdf'
 export const RESUME_FALLBACK_URL = '/leonardo-prasetyo-resume.pdf'
 export const RESUME_DOWNLOAD_URL = '/api/library/resume/content'
@@ -39,6 +41,19 @@ export function isPdf(bytes: Uint8Array): boolean {
     && bytes[2] === 0x44
     && bytes[3] === 0x46
     && bytes[4] === 0x2d
+}
+
+export function resumePdfTitle(filename: string): string {
+  return safeResumePdfName(filename).replace(/\.pdf$/i, '')
+}
+
+export async function normalizeResumePdfMetadata(
+  bytes: Uint8Array,
+  filename: string
+): Promise<Uint8Array<ArrayBuffer>> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false })
+  pdf.setTitle(resumePdfTitle(filename), { showInWindowTitleBar: true })
+  return Uint8Array.from(await pdf.save())
 }
 
 export function toHex(buffer: ArrayBuffer): string {

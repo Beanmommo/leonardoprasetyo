@@ -42,11 +42,14 @@ type AdminIndexingTask = {
 }
 
 type TaskResponse = { task: AdminIndexingTask }
+type RetryTaskResponse = { originalTaskId: string, task: AdminIndexingTask }
 
 const route = useRoute()
+const toast = useToast()
 const task = shallowRef<AdminIndexingTask | null>(null)
 const taskLoading = ref(false)
 const taskError = ref<string | null>(null)
+const retrying = ref(false)
 
 useSeoMeta({
   title: 'Indexing Task | Leonardo Prasetyo',
@@ -71,8 +74,8 @@ const stageSteps: Array<{ stage: Exclude<TaskStage, 'failed'>, label: string, de
   { stage: 'saving_chunks', label: 'Saving chunk metadata', description: 'Writing chunk text and provenance to D1.' },
   { stage: 'publishing_vectors', label: 'Publishing vectors', description: 'Upserting the new generation into Vectorize.' },
   { stage: 'verifying_vectors', label: 'Verifying vectors', description: 'Waiting until every vector is queryable.' },
-  { stage: 'activating_document', label: 'Activating document', description: 'Atomically publishing the new document generation.' },
-  { stage: 'cleaning_previous', label: 'Cleaning previous revision', description: 'Removing superseded vectors and objects.' },
+  { stage: 'activating_document', label: 'Publishing source', description: 'Publishing this file generation as a searchable RAG source.' },
+  { stage: 'cleaning_previous', label: 'Finalizing source', description: 'Finalizing this file as a published RAG source.' },
   { stage: 'complete', label: 'Ready', description: 'The document is published and searchable.' }
 ]
 
@@ -124,6 +127,33 @@ async function loadTask(silent = false) {
 
 function openPdf() {
   if (task.value) window.open(task.value.contentUrl, '_blank', 'noopener,noreferrer')
+}
+
+async function retryTask() {
+  if (!task.value || task.value.status !== 'failed' || retrying.value) return
+
+  const failedTaskId = task.value.id
+  retrying.value = true
+  try {
+    const response = await $fetch<RetryTaskResponse>(`/api/admin/library/tasks/${failedTaskId}/retry`, {
+      method: 'POST'
+    })
+    await navigateTo(`/admin/task/${response.task.id}`)
+    task.value = response.task
+    toast.add({
+      title: 'Indexing retry queued',
+      description: 'A new Workflow instance is processing this document.',
+      color: 'success'
+    })
+  } catch (error) {
+    toast.add({
+      title: 'Indexing retry failed',
+      description: errorMessage(error, 'The failed indexing task could not be retried.'),
+      color: 'error'
+    })
+  } finally {
+    retrying.value = false
+  }
 }
 
 const { pause, resume } = useIntervalFn(() => loadTask(true), 2000, { immediate: false })
@@ -203,13 +233,22 @@ onBeforeUnmount(pause)
                   {{ task.id }}
                 </p>
               </div>
-              <UButton
-                label="Open PDF"
-                icon="i-lucide-external-link"
-                color="neutral"
-                variant="outline"
-                @click="openPdf"
-              />
+              <div class="flex flex-wrap items-center gap-2">
+                <UButton
+                  v-if="task.status === 'failed'"
+                  label="Retry indexing"
+                  icon="i-lucide-refresh-cw"
+                  :loading="retrying"
+                  @click="retryTask"
+                />
+                <UButton
+                  label="Open PDF"
+                  icon="i-lucide-external-link"
+                  color="neutral"
+                  variant="outline"
+                  @click="openPdf"
+                />
+              </div>
             </header>
 
             <UAlert

@@ -27,13 +27,19 @@ The application request flow is:
 
 The example names are deliberately stable across the application and deployment configuration:
 
-| Binding | Production resource | Notes |
-| --- | --- | --- |
-| `AI` | Workers AI binding | Calls use Cloudflare-hosted models and the `leonardoprasetyo` AI Gateway. |
-| `DB` | `leonardoprasetyo-prod` | D1 database used by NuxtHub/Drizzle. |
-| `BLOB` | `leonardoprasetyo-uploads-prod` | Private R2 bucket used by NuxtHub Blob. |
-| `VECTORIZE` | `leonardoprasetyo-documents-prod` | 1,024 dimensions with cosine distance. |
-| `INDEXING_WORKFLOW` | `leonardoprasetyo-library-indexing-prod` | Durable `LibraryIndexingWorkflow`, limited to one concurrent indexing task. |
+| Binding | Development resource | Production resource | Notes |
+| --- | --- | --- | --- |
+| Worker | `leonardoprasetyo-dev` | `leonardoprasetyo` | The same source is built from different Git branches. |
+| `AI` | Workers AI binding | Workers AI binding | Calls use Cloudflare-hosted models and the `leonardoprasetyo` AI Gateway. |
+| `DB` | `leonardoprasetyo-dev` | `leonardoprasetyo-prod` | D1 database used by NuxtHub/Drizzle. |
+| `BLOB` | `leonardoprasetyo-uploads-dev` | `leonardoprasetyo-uploads-prod` | Private R2 bucket used by NuxtHub Blob. |
+| `VECTORIZE` | `leonardoprasetyo-documents-dev` | `leonardoprasetyo-documents-prod` | 1,024 dimensions with cosine distance. |
+| `INDEXING_WORKFLOW` | `leonardoprasetyo-library-indexing-dev` | `leonardoprasetyo-library-indexing-prod` | Durable `LibraryIndexingWorkflow`, limited to one concurrent indexing task. |
+
+The published development Worker binds only to
+`leonardoprasetyo-library-indexing-dev`; production binds only to
+`leonardoprasetyo-library-indexing-prod`. Both Workflow resources run the same
+`LibraryIndexingWorkflow` source from the commit deployed to their Worker.
 
 The embedding model is Cloudflare-hosted `@cf/qwen/qwen3-embedding-0.6b`. It returns 1,024-dimensional vectors, so the Vectorize index must use 1,024 dimensions and cosine distance. Changing embedding models or dimensions later requires creating a new index and re-embedding the corpus.
 
@@ -49,7 +55,14 @@ The detailed public chat, daily IP quota, PDF ingestion, retrieval, and read-onl
 Wrangler. Workers AI (`AI`), `leonardoprasetyo-dev` D1 (`DB`),
 `leonardoprasetyo-uploads-dev` R2 (`BLOB`), and
 `leonardoprasetyo-documents-dev` (`VECTORIZE`) use remote bindings, while the
-`LibraryIndexingWorkflow` runs through the local Wrangler Worker. Keeping
+`LibraryIndexingWorkflow` runs in Wrangler's local Workflow emulator. This is a
+local-only Workflow deployment: it neither requires nor updates the published
+`leonardoprasetyo-library-indexing-dev` Workflow. While `dev:local` is running,
+inspect it with `pnpm exec wrangler workflows list --local --port 8787` or the
+Local Explorer at `http://localhost:8787/cdn-cgi/explorer`. The same
+Worker code executes ingestion directly through its bound D1, R2, Workers AI,
+and Vectorize services in both development and production; only the configured
+resource destinations change between environments. Keeping
 the storage trio in the same remote development environment ensures Vectorize
 result IDs resolve to D1 chunk text and D1 object keys resolve to the original
 R2 PDFs. The command applies remote development D1 migrations before starting
@@ -106,7 +119,25 @@ pnpm build
 pnpm cloudflare:migrate
 ```
 
-The authoritative RAG schema is the application-owned chain under `server/db/migrations/sqlite/`, including the Library tables in `0003_overjoyed_bloodstrike.sql`, the ingestion lease/generation fields in `0004_perfect_nova.sql`, generation-scoped chunk uniqueness in `0005_many_shinobi_shaw.sql`, and persistent indexing task history in `0006_lazy_arclight.sql`. NuxtHub tracks it with `_hub_migrations`. There is intentionally no second infrastructure SQL copy.
+The authoritative RAG schema is the application-owned chain under `server/db/migrations/sqlite/`, including the Library tables in `0003_overjoyed_bloodstrike.sql`, the ingestion lease/generation fields in `0004_perfect_nova.sql`, generation-scoped chunk uniqueness in `0005_many_shinobi_shaw.sql`, persistent indexing task history in `0006_lazy_arclight.sql`, and the resume/document source roles in `0007_worried_grim_reaper.sql`. NuxtHub tracks it with `_hub_migrations`. There is intentionally no second infrastructure SQL copy.
+
+## Branch promotion and deployment
+
+The Git deployment contract is:
+
+- Push `dev` to validate and deploy `leonardoprasetyo-dev`, including
+  `leonardoprasetyo-library-indexing-dev`.
+- Merge the tested `dev` commit into `main` and push `main` to deploy
+  `leonardoprasetyo`, including `leonardoprasetyo-library-indexing-prod`.
+- A `dev` push never updates production, and a `main` push never binds the
+  production Worker to development storage or Workflow instances.
+
+GitHub Actions requires repository variables
+`NUXT_HUB_CLOUDFLARE_DATABASE_ID` and
+`NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID`. Configure a `development` GitHub
+Environment with `DEVELOPMENT_URL`, `CLOUDFLARE_ACCOUNT_ID`, and
+`CLOUDFLARE_API_TOKEN`; the existing `production` environment uses the
+corresponding production values.
 
 ## Build, secrets, and deploy
 
@@ -122,32 +153,63 @@ pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_SECRET --config .output/s
 pnpm exec wrangler secret put IP_HASH_SECRET --config .output/server/wrangler.json
 pnpm exec wrangler secret put LIBRARY_ADMIN_TOKEN --config .output/server/wrangler.json
 
-pnpm cloudflare:deploy
+pnpm cloudflare:deploy:prod
 ```
 
-`cloudflare:deploy` rebuilds the Worker, applies all pending remote D1 migrations, and deploys only if migration succeeds. `cloudflare:migrate` remains available for an explicit migration-only run.
+Before the first published development deployment, generate its configuration
+and seed the same five runtime secret names on the separate development Worker:
+
+```bash
+CLOUDFLARE_DEPLOY_ENV=dev pnpm build
+pnpm exec wrangler secret put NUXT_SESSION_PASSWORD --config .output/server/wrangler.json
+pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_ID --config .output/server/wrangler.json
+pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_SECRET --config .output/server/wrangler.json
+pnpm exec wrangler secret put IP_HASH_SECRET --config .output/server/wrangler.json
+pnpm exec wrangler secret put LIBRARY_ADMIN_TOKEN --config .output/server/wrangler.json
+pnpm cloudflare:deploy:dev
+```
+
+`cloudflare:deploy:dev` builds against development resources, applies remote
+development D1 migrations, and publishes the development Worker and Workflow.
+`cloudflare:deploy:prod` does the equivalent for production. The legacy
+`cloudflare:deploy` command remains a production alias.
 
 The Cloudflare-hosted model calls require no OpenAI, Google, or other provider API key. The Workers AI binding authenticates them. The OAuth, session, admin-token, and IP secrets remain encrypted Worker secrets, never `vars` or `runtimeConfig.public` values.
 
 The build uses compatibility date `2026-08-29` with `nodejs_compat`. `pdf-parse` is loaded lazily inside the ingestion request with JavaScript evaluation and worker fetches disabled; if it cannot parse in the Worker runtime, ingestion falls back to Cloudflare Workers AI `AI.toMarkdown()` and continues through the same splitter, Qwen embedding, D1, and Vectorize stages. The generated Worker is suitable for Workers Paid; production ingestion should not rely on the Free plan's small CPU allowance.
 
-## Publish and ingest a PDF
+## Publish and ingest Library sources
 
 The R2 bucket stays private. A signed-in, allowlisted GitHub administrator can
 upload and delete documents at `/admin`. The browser routes require same-origin
 mutations. The `LIBRARY_ADMIN_TOKEN` bearer credential remains available for
 CI or CLI administration and must contain at least 32 random bytes. With
-`PORTFOLIO_ORIGIN` and `LIBRARY_ADMIN_TOKEN` set locally, upload any PDF through
-the server-only file endpoint, then pass the UUID returned as `file.id` to
-the asynchronous ingestion endpoint:
+`PORTFOLIO_ORIGIN` and `LIBRARY_ADMIN_TOKEN` set locally, publish the canonical
+resume through the dedicated endpoint. It overwrites only
+`library/public/resume/current.pdf`, updates the single D1 source with role
+`resume`, and returns the durable indexing task in the same `202 Accepted`
+response:
+
+```bash
+curl --fail-with-body --request PUT \
+  "${PORTFOLIO_ORIGIN}/api/admin/library/resume" \
+  --header "Authorization: Bearer ${LIBRARY_ADMIN_TOKEN}" \
+  --header "Content-Type: application/pdf" \
+  --header "X-Filename: leonardo-prasetyo-resume.pdf" \
+  --data-binary @public/leonardo-prasetyo-resume.pdf
+```
+
+Other PDFs are additive Library documents. Upload one through the generic file
+endpoint, then pass the returned `file.id` to the asynchronous ingestion
+endpoint:
 
 ```bash
 curl --fail-with-body --request PUT \
   "${PORTFOLIO_ORIGIN}/api/admin/library/files" \
   --header "Authorization: Bearer ${LIBRARY_ADMIN_TOKEN}" \
   --header "Content-Type: application/pdf" \
-  --header "X-Filename: leonardo-prasetyo-resume.pdf" \
-  --data-binary @public/leonardo-prasetyo-resume.pdf
+  --header "X-Filename: project-details.pdf" \
+  --data-binary @project-details.pdf
 
 curl --fail-with-body --request POST \
   "${PORTFOLIO_ORIGIN}/api/admin/library/ingest" \
@@ -168,12 +230,15 @@ server-side GitHub allowlist, and an explicit same-origin request check. CLI/CI
 requests use the constant-time bearer-token check. `/api/chat` remains CSRF
 protected. Ingestion requires an explicit upload UUID; there is no implicit
 "latest file" selection. Repeating ingestion for the current ready checksum is
-an idempotent no-op. A changed PDF holds a renewable, expiring singleton D1
-publication lease, verifies generation-marked vectors, and completes a
-transactional active-document switch before owner-checked old-object cleanup.
-Deletion uses the same lease, waits for the asynchronous Vectorize deletion,
-then removes the private R2 object and soft-deletes its D1 upload metadata and
-chunk records. An interrupted lease can be taken over after expiry.
+an idempotent no-op. Every changed PDF holds a renewable, expiring singleton D1
+publication lease and verifies generation-marked vectors before publishing its
+own current generation. Publishing one normal document does not deactivate or
+delete another. The resume is replaced only through its dedicated fixed R2
+key, is indexed with role `resume`, participates in RAG retrieval, and is hidden
+from the normal document list. Document deletion uses the same lease, waits for
+the asynchronous Vectorize deletion, then removes that document's private R2
+object and soft-deletes its D1 upload metadata and chunk records. An interrupted
+lease can be taken over after expiry.
 
 The Cron Trigger `17 0 * * *` runs daily and deletes `question_usage` rows older than seven days. Verify the scheduled event and deletion count in Worker logs after the first deployment.
 
@@ -186,7 +251,7 @@ The Cron Trigger `17 0 * * *` runs daily and deletes `question_usage` rows older
 - Document ingestion holds a renewable singleton D1 lease with a unique generation ID. Expired work can be taken over, different revisions cannot publish concurrently, and cleanup/finalization is owner checked.
 - Before parsing, ingestion verifies the R2 object's MIME metadata, stored size, PDF signature, and SHA-256 against D1. Extracted page, character, and chunk ceilings bound parser expansion and embedding cost.
 - Published PDFs are served with a restrictive CSP sandbox, and indexed text is control-character normalized and encoded as untrusted JSON before reaching the chat model prompt.
-- Every Vectorize record uses the ingestion UUID as its namespace and carries that generation plus the content hash in metadata. Readiness and public reads require the active generation, while generation-specific IDs and D1 uniqueness keep late stale-worker writes isolated.
+- Every Vectorize record uses the ingestion UUID as its namespace and carries that generation plus the content hash in metadata. Retrieval searches across all published resume and document sources, then validates each match against its active D1 generation. Generation-specific IDs and D1 uniqueness keep late stale-worker writes isolated.
 - Content-addressed concurrent uploads atomically preserve the persisted lifecycle state, safely revive only deleted rows, and avoid deleting an R2 object that another record still references.
 - Production builds fail without a non-placeholder D1 database UUID. The custom production entry and its request limits are included in the generated Worker bundle.
 

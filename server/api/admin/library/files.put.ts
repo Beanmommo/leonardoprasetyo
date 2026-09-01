@@ -71,6 +71,12 @@ export default defineEventHandler(async (event) => {
   const existingUpload = await db.query.uploads.findFirst({
     where: () => eq(schema.uploads.checksumSha256, checksumSha256)
   })
+  if (existingUpload?.role === 'resume') {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'This PDF is the published resume and cannot also be added as a document'
+    })
+  }
   const r2Key = existingUpload?.r2Key || `library/public/documents/${checksumSha256}.pdf`
   const bucket = requireCloudflareBinding(event, 'BLOB')
   const previousObject = await bucket.head(r2Key)
@@ -99,6 +105,7 @@ export default defineEventHandler(async (event) => {
       contentType: 'application/pdf',
       sizeBytes: body.byteLength,
       checksumSha256,
+      role: 'document',
       status: 'uploaded',
       isPublic: true,
       isActive: false,
@@ -112,6 +119,9 @@ export default defineEventHandler(async (event) => {
       errorMessage: null
     }).onConflictDoUpdate({
       target: schema.uploads.checksumSha256,
+      // Never let a document upsert repurpose the fixed resume row, even if a
+      // concurrent resume publication claimed this checksum after the lookup.
+      setWhere: eq(schema.uploads.role, 'document'),
       set: {
         r2Key,
         originalName: filename,
@@ -140,6 +150,15 @@ export default defineEventHandler(async (event) => {
     })
 
     if (!persisted) {
+      const checksumOwner = await db.query.uploads.findFirst({
+        where: () => eq(schema.uploads.checksumSha256, checksumSha256)
+      })
+      if (checksumOwner?.role === 'resume') {
+        throw createError({
+          statusCode: 409,
+          statusMessage: 'This PDF is the published resume and cannot also be added as a document'
+        })
+      }
       throw new Error('D1 did not return the persisted Library upload')
     }
 
@@ -153,7 +172,7 @@ export default defineEventHandler(async (event) => {
     if (!previousObject) {
       try {
         const referenced = await db.query.uploads.findFirst({
-          where: () => eq(schema.uploads.checksumSha256, checksumSha256)
+          where: () => eq(schema.uploads.r2Key, r2Key)
         })
         if (!referenced) {
           await bucket.delete(r2Key)

@@ -1,9 +1,9 @@
-import type { H3Event } from 'h3'
 import {
   CLOUDFLARE_EMBEDDING_MODEL,
   getCloudflareConfig,
   requireCloudflareBinding
 } from './cloudflareBindings'
+import type { CloudflareBindingSource } from './cloudflareBindings'
 
 type WorkersAiEmbeddingOptions = {
   kind: 'query' | 'document'
@@ -22,7 +22,7 @@ function readEmbeddingValues(payload: { data?: number[][] }): number[] | undefin
 }
 
 export async function createWorkersAiEmbedding(
-  event: H3Event,
+  source: CloudflareBindingSource,
   text: string,
   options: WorkersAiEmbeddingOptions
 ): Promise<number[]> {
@@ -31,8 +31,8 @@ export async function createWorkersAiEmbedding(
     throw new Error('Cannot embed empty text')
   }
 
-  const ai = requireCloudflareBinding(event, 'AI')
-  const config = getCloudflareConfig(event)
+  const ai = requireCloudflareBinding(source, 'AI')
+  const config = getCloudflareConfig(source)
   const input = options.kind === 'query'
     ? {
         queries: [normalizedText],

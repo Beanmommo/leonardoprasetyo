@@ -1,5 +1,5 @@
 import { db, schema } from 'hub:db'
-import { and, asc, count, eq, isNotNull } from 'drizzle-orm'
+import { and, asc, count, desc, eq, isNotNull } from 'drizzle-orm'
 import { z } from 'zod'
 
 const vectorQuerySchema = z.object({
@@ -41,7 +41,8 @@ export default defineEventHandler(async (event) => {
       eq(schema.uploads.isActive, true),
       eq(schema.uploads.status, 'ready'),
       isNotNull(schema.uploads.ingestionId)
-    )
+    ),
+    orderBy: () => desc(schema.uploads.indexedAt)
   })
 
   if (!upload?.ingestionId) {
@@ -106,7 +107,9 @@ export default defineEventHandler(async (event) => {
     return {
       vectorId: row.vectorId,
       sourceFilename: upload.originalName,
-      sourceFileUrl: `/api/library/files/${upload.id}/content`,
+      sourceFileUrl: upload.role === 'resume'
+        ? '/api/library/resume/content'
+        : `/api/library/files/${upload.id}/content`,
       pageNumber: row.pageNumber,
       chunkIndex: row.chunkIndex,
       textPreview: row.textContent.slice(0, 320),

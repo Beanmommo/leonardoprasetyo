@@ -14,6 +14,7 @@ interface LibraryFile {
   contentType: string
   sizeBytes: number
   checksumSha256: string
+  role: 'resume' | 'document'
   status: string
   pageCount: number | null
   chunkCount: number
@@ -108,7 +109,10 @@ const {
   error: filesError,
   refresh: refreshFiles
 } = await useFetch<FilesResponse>('/api/library/files', {
-  key: 'public-library-files'
+  key: `public-library-files-${props.view === 'files' ? 'documents' : 'rag'}`,
+  query: {
+    role: props.view === 'files' ? 'document' : 'all'
+  }
 })
 
 const {
@@ -164,6 +168,9 @@ const vectorColumns: TableColumn<LibraryVector>[] = [
 ]
 const fileColumns: TableColumn<LibraryFile>[] = [
   { accessorKey: 'originalName', header: 'File' },
+  ...(props.view === 'files'
+    ? []
+    : [{ accessorKey: 'role' as const, header: 'Role' }]),
   {
     id: 'objectKey',
     accessorFn: file => file.r2?.key ?? '—',

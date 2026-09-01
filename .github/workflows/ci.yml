@@ -2,9 +2,9 @@ name: CI and deploy
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      CLOUDFLARE_DEPLOY_ENV: ${{ (github.ref == 'refs/heads/dev' || github.base_ref == 'dev') && 'dev' || 'prod' }}
       NUXT_HUB_CLOUDFLARE_DATABASE_ID: ${{ vars.NUXT_HUB_CLOUDFLARE_DATABASE_ID }}
+      NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID: ${{ vars.NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID }}
 
     steps:
       - name: Checkout
@@ -46,7 +48,69 @@ jobs:
       - name: Validate Worker bundle
         run: pnpm cloudflare:dry-run
 
-  deploy:
+  deploy-development:
+    name: Deploy development
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: development
+      url: ${{ vars.DEVELOPMENT_URL }}
+    concurrency:
+      group: development
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_ENV: dev
+      NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID: ${{ vars.NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID }}
+      DEVELOPMENT_URL: ${{ vars.DEVELOPMENT_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check deployment configuration
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "CLOUDFLARE_ACCOUNT_ID is not configured" >&2; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "CLOUDFLARE_API_TOKEN is not configured" >&2; exit 1; }
+          test -n "$NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID" || { echo "NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID is not configured" >&2; exit 1; }
+          test -n "$DEVELOPMENT_URL" || { echo "DEVELOPMENT_URL is not configured" >&2; exit 1; }
+
+      - name: Build, migrate, and deploy development Worker
+        run: pnpm cloudflare:deploy:dev
+
+      - name: Smoke test development
+        shell: bash
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --output /dev/null \
+            "${DEVELOPMENT_URL}?deployment=${GITHUB_SHA}"
+
+  deploy-production:
     name: Deploy production
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: ci
@@ -61,6 +125,7 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_ENV: prod
       NUXT_HUB_CLOUDFLARE_DATABASE_ID: ${{ vars.NUXT_HUB_CLOUDFLARE_DATABASE_ID }}
       PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
 
@@ -89,7 +154,7 @@ jobs:
           test -n "$PRODUCTION_URL" || { echo "PRODUCTION_URL is not configured" >&2; exit 1; }
 
       - name: Build, migrate, and deploy Worker
-        run: pnpm cloudflare:deploy
+        run: pnpm cloudflare:deploy:prod
 
       - name: Smoke test production
         shell: bash

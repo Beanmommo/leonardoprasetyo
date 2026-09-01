@@ -1,7 +1,17 @@
 import { Buffer } from 'node:buffer'
 import { WorkflowEntrypoint } from 'cloudflare:workers'
+import { NonRetryableError } from 'cloudflare:workflows'
 import { useNitroApp } from 'nitropack/runtime'
 import { isPublicAssetURL } from '#nitro-internal-virtual/public-assets'
+import { db, schema } from 'hub:db'
+import { eq } from 'drizzle-orm'
+import { ingestDocument } from '../utils/documentIngestion'
+import {
+  completeIndexingTask,
+  failIndexingTask,
+  startIndexingTask,
+  updateIndexingTaskProgress
+} from '../utils/indexingTasks'
 
 const CHAT_BODY_LIMIT = 64 * 1024
 const ADMIN_INGEST_BODY_LIMIT = 16 * 1024
@@ -10,15 +20,12 @@ const DEFAULT_BODY_LIMIT = 1024 * 1024
 
 const nitroApp = useNitroApp()
 
-function workflowLocalFetch(path, env, init = {}) {
-  globalThis.__env__ = env
-  return nitroApp.localFetch(path, {
-    ...init,
-    context: {
-      indexingWorkflow: true,
-      cloudflare: { env }
-    }
-  })
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function workflowFailureMessage(event, error) {
+  return `Cloudflare Workflow ${event.workflowName}/${event.instanceId} failed: ${errorMessage(error)}`
 }
 
 export class LibraryIndexingWorkflow extends WorkflowEntrypoint {
@@ -29,47 +36,76 @@ export class LibraryIndexingWorkflow extends WorkflowEntrypoint {
       throw new Error('Invalid Library indexing workflow payload')
     }
 
+    // NuxtHub's generated database adapter resolves the D1 binding from this
+    // environment. Development and production run this same code; Wrangler
+    // selects which D1/R2/Vectorize resources are bound to the Worker.
+    globalThis.__env__ = this.env
+
     try {
-      return await step.do('index Library document', {
+      await step.do('validate Library indexing task', async () => {
+        const task = await db.query.indexingTasks.findFirst({
+          where: () => eq(schema.indexingTasks.id, taskId)
+        })
+        if (!task || task.uploadId !== uploadId) {
+          throw new NonRetryableError('Indexing task not found')
+        }
+        return { taskId, uploadId }
+      })
+
+      const result = await step.do('index Library source', {
         retries: {
           limit: 2,
           delay: '5 seconds',
           backoff: 'exponential'
         }
-      }, async () => {
-        const response = await workflowLocalFetch(
-          `/api/internal/library/tasks/${encodeURIComponent(taskId)}/run`,
-          this.env,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ uploadId })
-          }
-        )
-        const body = await response.json().catch(() => ({}))
-        if (!response.ok) {
-          throw new Error(body.statusMessage || body.message || `Indexing task failed with HTTP ${response.status}`)
+      }, async (stepContext) => {
+        await startIndexingTask(taskId)
+        try {
+          return await ingestDocument(this.env, uploadId, {
+            onProgress: progress => updateIndexingTaskProgress(taskId, progress)
+          })
+        } catch (error) {
+          console.error(JSON.stringify({
+            message: 'Indexing workflow attempt failed',
+            workflowName: event.workflowName,
+            workflowInstanceId: event.instanceId,
+            taskId,
+            uploadId,
+            attempt: stepContext.attempt,
+            error: errorMessage(error)
+          }))
+          throw error
         }
-        return body
       })
+
+      await step.do('complete Library indexing task', async () => {
+        await completeIndexingTask(taskId, result)
+        return { taskId, status: 'ready' }
+      })
+
+      return { taskId, result }
     } catch (error) {
+      const failureMessage = workflowFailureMessage(event, error)
       try {
-        await workflowLocalFetch(
-          `/api/internal/library/tasks/${encodeURIComponent(taskId)}/fail`,
-          this.env,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              message: error instanceof Error ? error.message : String(error)
-            })
-          }
-        )
+        await step.do('record Library indexing failure', {
+          retries: {
+            limit: 5,
+            delay: '2 seconds',
+            backoff: 'exponential'
+          },
+          timeout: '1 minute'
+        }, async () => {
+          await failIndexingTask(taskId, failureMessage)
+          return { taskId, status: 'failed', errorMessage: failureMessage }
+        })
       } catch (recordError) {
         console.error(JSON.stringify({
           message: 'Could not record terminal Library indexing workflow failure',
+          workflowName: event.workflowName,
+          workflowInstanceId: event.instanceId,
           taskId,
-          error: recordError instanceof Error ? recordError.message : String(recordError)
+          workflowError: errorMessage(error),
+          error: errorMessage(recordError)
         }))
       }
       throw error
