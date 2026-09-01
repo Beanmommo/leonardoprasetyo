@@ -17,7 +17,7 @@ useHead({
   }
 })
 
-const title = 'Leonardo Prasetyo | Full-stack and AI Engineer'
+const title = 'Ask about Leonardo\'s experience'
 const description = 'Leonardo Prasetyo\'s portfolio, resume and public AI assistant, grounded in his professional experience.'
 
 useSeoMeta({
