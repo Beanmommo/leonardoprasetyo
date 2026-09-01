@@ -103,7 +103,8 @@ function citationUrl(citation: PortfolioCitation, page = citationPage(citation))
     ?? citation.url
     ?? (citation.uploadId ? `/api/library/files/${encodeURIComponent(citation.uploadId)}/content` : '/library')
   const candidateWithoutFragment = candidate.split('#', 1)[0]!
-  const base = candidateWithoutFragment === '/library' || candidateWithoutFragment.startsWith('/api/library/files/')
+  const base = candidateWithoutFragment === '/api/library/resume/content'
+    || candidateWithoutFragment.startsWith('/api/library/files/')
     ? candidateWithoutFragment
     : '/library'
   return page && base !== '/library' ? `${base}#page=${page}` : base
