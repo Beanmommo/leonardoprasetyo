@@ -137,6 +137,7 @@ function bodyLimit(pathname) {
   if (pathname === '/api/admin/library/files') return DOCUMENT_PDF_BODY_LIMIT
   if (pathname === '/api/admin/library/resume') return DOCUMENT_PDF_BODY_LIMIT
   if (pathname === '/api/admin/library/ingest') return ADMIN_INGEST_BODY_LIMIT
+  if (/^\/api\/admin\/leonardo-activity(?:\/[^/]+)?$/.test(pathname)) return 2 * 1024 * 1024
   return DEFAULT_BODY_LIMIT
 }
 

@@ -93,7 +93,11 @@ export default defineNuxtConfig({
     // mutations also enforce a same-origin request in assertLibraryAdmin.
     // @ts-expect-error nuxt-csurf adds this route-rule key at runtime, but its
     // module augmentation is not visible through Nuxt 4's generated config type.
-    '/api/admin/library/**': { csurf: false }
+    '/api/admin/library/**': { csurf: false },
+    // @ts-expect-error See note above.
+    '/api/admin/leonardo-activity': { csurf: false },
+    // @ts-expect-error See note above.
+    '/api/admin/leonardo-activity/**': { csurf: false }
   },
 
   experimental: {
