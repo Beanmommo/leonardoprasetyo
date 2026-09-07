@@ -49,6 +49,10 @@ function formatDate(value: string): string {
     }"
     class="w-full"
   >
+    <template #title="{ item }">
+      <span :id="`activity-${item.id}`" class="scroll-mt-24">{{ item.title }}</span>
+    </template>
+
     <template #date="{ item }">
       <time v-if="item.showDate" :datetime="item.date" :title="formatDate(item.date)">
         {{ formatDate(item.date) }}

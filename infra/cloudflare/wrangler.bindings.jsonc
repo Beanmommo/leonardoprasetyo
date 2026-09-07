@@ -37,6 +37,11 @@
     }
   ],
   "vars": {
+    "APP_ENVIRONMENT": "prod",
+    "ACTIVITY_DATABASE_NAME": "leonardoprasetyo-prod",
+    "LANGSMITH_TRACING": "true",
+    "LANGSMITH_PROJECT": "leonardo-chat-prod",
+    "LANGSMITH_ENDPOINT": "https://api.smith.langchain.com",
     "AI_GATEWAY_ID": "leonardoprasetyo",
     "CHAT_MODEL": "@cf/ibm-granite/granite-4.0-h-micro",
     "EMBEDDING_PROVIDER": "workers-ai",

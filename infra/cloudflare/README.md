@@ -27,19 +27,19 @@ The application request flow is:
 
 The example names are deliberately stable across the application and deployment configuration:
 
-| Binding | Development resource | Production resource | Notes |
+| Binding | Local development resource | Production resource | Notes |
 | --- | --- | --- | --- |
-| Worker | `leonardoprasetyo-dev` | `leonardoprasetyo` | The same source is built from different Git branches. |
+| Worker | Local emulator | `leonardoprasetyo` | Only `main` deploys a Worker through GitHub Actions. |
 | `AI` | Workers AI binding | Workers AI binding | Calls use Cloudflare-hosted models and the `leonardoprasetyo` AI Gateway. |
 | `DB` | `leonardoprasetyo-dev` | `leonardoprasetyo-prod` | D1 database used by NuxtHub/Drizzle. |
 | `BLOB` | `leonardoprasetyo-uploads-dev` | `leonardoprasetyo-uploads-prod` | Private R2 bucket used by NuxtHub Blob. |
 | `VECTORIZE` | `leonardoprasetyo-documents-dev` | `leonardoprasetyo-documents-prod` | 1,024 dimensions with cosine distance. |
-| `INDEXING_WORKFLOW` | `leonardoprasetyo-library-indexing-dev` | `leonardoprasetyo-library-indexing-prod` | Durable `LibraryIndexingWorkflow`, limited to one concurrent indexing task. |
+| `INDEXING_WORKFLOW` | `leonardoprasetyo-library-indexing-dev` (local emulator) | `leonardoprasetyo-library-indexing-prod` | Durable `LibraryIndexingWorkflow`, limited to one concurrent indexing task. |
 
-The published development Worker binds only to
-`leonardoprasetyo-library-indexing-dev`; production binds only to
-`leonardoprasetyo-library-indexing-prod`. Both Workflow resources run the same
-`LibraryIndexingWorkflow` source from the commit deployed to their Worker.
+Local development runs the Worker and `LibraryIndexingWorkflow` in Wrangler's
+emulator with remote development storage. Production deploys the same
+implementation to `leonardoprasetyo` and
+`leonardoprasetyo-library-indexing-prod`.
 
 The embedding model is Cloudflare-hosted `@cf/qwen/qwen3-embedding-0.6b`. It returns 1,024-dimensional vectors, so the Vectorize index must use 1,024 dimensions and cosine distance. Changing embedding models or dimensions later requires creating a new index and re-embedding the corpus.
 
@@ -55,9 +55,9 @@ The detailed public chat, daily IP quota, PDF ingestion, retrieval, and read-onl
 Wrangler. Workers AI (`AI`), `leonardoprasetyo-dev` D1 (`DB`),
 `leonardoprasetyo-uploads-dev` R2 (`BLOB`), and
 `leonardoprasetyo-documents-dev` (`VECTORIZE`) use remote bindings, while the
-`LibraryIndexingWorkflow` runs in Wrangler's local Workflow emulator. This is a
-local-only Workflow deployment: it neither requires nor updates the published
-`leonardoprasetyo-library-indexing-dev` Workflow. While `dev:local` is running,
+`LibraryIndexingWorkflow` runs in Wrangler's local Workflow emulator. The Worker
+and Workflow run locally; only AI and the development data bindings are remote.
+While `dev:local` is running,
 inspect it with `pnpm exec wrangler workflows list --local --port 8787` or the
 Local Explorer at `http://localhost:8787/cdn-cgi/explorer`. The same
 Worker code executes ingestion directly through its bound D1, R2, Workers AI,
@@ -125,19 +125,18 @@ The authoritative RAG schema is the application-owned chain under `server/db/mig
 
 The Git deployment contract is:
 
-- Push `dev` to validate and deploy `leonardoprasetyo-dev`, including
-  `leonardoprasetyo-library-indexing-dev`.
+- Run development locally with `pnpm run dev:local`. Pushes and pull requests
+  targeting `dev` do not trigger GitHub Actions.
 - Merge the tested `dev` commit into `main` and push `main` to deploy
   `leonardoprasetyo`, including `leonardoprasetyo-library-indexing-prod`.
-- A `dev` push never updates production, and a `main` push never binds the
-  production Worker to development storage or Workflow instances.
+- Pull requests targeting `main` run validation only. Manual workflow runs are
+  restricted to `main`.
 
-GitHub Actions requires repository variables
-`NUXT_HUB_CLOUDFLARE_DATABASE_ID` and
-`NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID`. Configure a `development` GitHub
-Environment with `DEVELOPMENT_URL`, `CLOUDFLARE_ACCOUNT_ID`, and
-`CLOUDFLARE_API_TOKEN`; the existing `production` environment uses the
-corresponding production values.
+GitHub Actions requires the repository variable
+`NUXT_HUB_CLOUDFLARE_DATABASE_ID`. The existing `production` GitHub environment
+uses the `PRODUCTION_URL` variable and the `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` secrets. Set `NUXT_HUB_CLOUDFLARE_DEV_DATABASE_ID` in the
+local `.env` file for `pnpm dev:local`.
 
 ## Build, secrets, and deploy
 
@@ -156,22 +155,8 @@ pnpm exec wrangler secret put LIBRARY_ADMIN_TOKEN --config .output/server/wrangl
 pnpm cloudflare:deploy:prod
 ```
 
-Before the first published development deployment, generate its configuration
-and seed the same five runtime secret names on the separate development Worker:
-
-```bash
-CLOUDFLARE_DEPLOY_ENV=dev pnpm build
-pnpm exec wrangler secret put NUXT_SESSION_PASSWORD --config .output/server/wrangler.json
-pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_ID --config .output/server/wrangler.json
-pnpm exec wrangler secret put NUXT_OAUTH_GITHUB_CLIENT_SECRET --config .output/server/wrangler.json
-pnpm exec wrangler secret put IP_HASH_SECRET --config .output/server/wrangler.json
-pnpm exec wrangler secret put LIBRARY_ADMIN_TOKEN --config .output/server/wrangler.json
-pnpm cloudflare:deploy:dev
-```
-
-`cloudflare:deploy:dev` builds against development resources, applies remote
-development D1 migrations, and publishes the development Worker and Workflow.
-`cloudflare:deploy:prod` does the equivalent for production. The legacy
+`cloudflare:deploy:prod` builds against production resources, applies remote
+production D1 migrations, and publishes the production Worker and Workflow. The legacy
 `cloudflare:deploy` command remains a production alias.
 
 The Cloudflare-hosted model calls require no OpenAI, Google, or other provider API key. The Workers AI binding authenticates them. The OAuth, session, admin-token, and IP secrets remain encrypted Worker secrets, never `vars` or `runtimeConfig.public` values.
@@ -334,6 +319,84 @@ Consequences for chat history:
 - Any JavaScript running on the same origin can read it, so strong XSS controls remain essential.
 
 For a small portfolio assistant, localStorage is reasonable. If histories become large, move the message bodies to IndexedDB and retain only lightweight preferences or an index in localStorage.
+
+## Activity chat tool and LangSmith tracing
+
+The [technical documentation](../../docs/TECHNICAL_DOCUMENTATION.md#61-langchain-activity-tool)
+describes the tool schema, implementation files, query limits, citation behaviour,
+and trace structure.
+
+`POST /api/chat` exposes the LangChain `search_leonardo_activity` tool through
+the AI SDK. The tool reads `leonardo_activities` from the request's `DB` binding,
+with optional literal text and inclusive date filters, a maximum of ten results,
+and newest-first ordering using the timeline's Melbourne calendar dates. It
+accepts no SQL or environment selector and permits at most two activity lookups.
+Each answer permits at most three model steps, with the last step reserved for the
+answer. Activity citations link to the public timeline.
+
+The same Worker code sends traces to `leonardo-chat-dev` for development and
+`leonardo-chat-prod` for production. The generated Wrangler configuration sets
+the project and database metadata alongside the actual resource bindings.
+`LANGSMITH_API_KEY` is a separate service key in each environment: development
+loads it from the ignored root `.env`, and production inherits the encrypted
+secret on the `leonardoprasetyo` Worker. An ignored `.env.production` can retain
+the production key for rotation; it is not loaded by the development launcher.
+Never put key values in Wrangler `vars`, public runtime configuration, or CI logs.
+
+LangSmith traces contain the chat question, retrieved public excerpts, model
+messages and output, activity filters/results, timing, and errors. Request
+headers, cookies, IP addresses, and Worker bindings are not passed to tracing.
+Trace delivery uses a request-scoped client, flushes after streaming completes,
+and registers that completion with the Worker's `waitUntil`. Delivery failures
+are logged without preventing chat answers. Set `LANGSMITH_TRACING=false` on
+the Worker to disable tracing. When rotating the service keys, preserve their
+workspace scope and replace the local and production keys independently.
+For a persistent tracing toggle, change the generated `LANGSMITH_TRACING` value
+in `nuxt.config.ts`, then rebuild and deploy. A dashboard-only override may be
+replaced by the next deployment. The local launcher intentionally uses generated
+project/endpoint/flag values instead of similarly named `.env` settings.
+
+Open [LangSmith](https://smith.langchain.com/), select **Tracing**, then select
+the appropriate project and a `portfolio-chat` run. The trace includes Library
+retrieval, model steps, and the LangChain activity invocation. This integration
+uses LangSmith observability; it does not deploy an Agent Server for Studio.
+
+### Service key rotation
+
+The service keys created on 7 September 2026 are named `leonardo-chat-dev` and
+`leonardo-chat-prod`, scoped to the selected LangSmith workspace, with a
+three-month expiry. Check each key's exact expiry in LangSmith settings before
+rotation; do not record its value in documentation.
+
+1. Create a replacement service key in the same workspace for the target environment.
+2. For development, replace `LANGSMITH_API_KEY` in the ignored root `.env` and restart `pnpm run dev:local`.
+3. For production, build the production configuration and update the encrypted Worker secret using Wrangler's interactive prompt:
+
+   ```bash
+   CLOUDFLARE_DEPLOY_ENV=prod pnpm build
+   pnpm exec wrangler secret put LANGSMITH_API_KEY --name leonardoprasetyo --config .output/server/wrangler.json --env-file scripts/cloudflare-dev-local.env
+   ```
+
+   Enter the production key at the prompt rather than in command-line arguments.
+   Update the ignored `.env.production` backup separately. Keep both local secret
+   files restricted to their owner (`chmod 600 .env .env.production`).
+4. Send an activity question through that environment's chat and confirm a completed run in the expected project with the expected `environment` and `database` metadata.
+5. Revoke the superseded key after the replacement is verified.
+
+### Verification record: 7 September 2026
+
+The activity tool and tracing were deployed to Worker `leonardoprasetyo` as
+version `21c7cf44-00bf-4b1d-a373-fc3d2b6bcba1`. Existing activity migrations
+`0008` through `0011` were applied to production D1 before deployment.
+
+- Seven activity-tool tests, lint, typecheck, the production build, and Wrangler dry run passed.
+- `pnpm run dev:local` returned development activity entries and correct empty results for a date range without matches; activity citations opened the corresponding timeline entry.
+- A production chat request invoked the tool against `leonardoprasetyo-prod` and correctly reported its empty timeline at verification time. The [production trace](https://smith.langchain.com/o/87fc695a-a8d1-4842-97c3-88e1b0972b73/projects/p/3db3fd13-9245-468c-82ea-ab9995348bb3/trace/01a07b2a-6c40-7000-8000-03cbf717f459/run/01a07b2a-6c40-7000-8000-03cbf717f459) contains completed retrieval, model, and tool spans without errors; access requires the workspace account.
+- Both local key files were checked for Git exclusion and owner-only permissions, and the production build was checked for embedded key values. The local test server was stopped and port 8787 was confirmed clear.
+
+Run `pnpm test:activity-tool` for query bounds, date filters, literal search,
+environment isolation, citation stability, and cancellation tests. Use
+`pnpm dev:local` to verify the real D1/model/tool/streaming/tracing round trip.
 
 ## Source documentation
 

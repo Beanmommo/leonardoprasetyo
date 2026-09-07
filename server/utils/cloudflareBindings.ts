@@ -5,7 +5,8 @@ import type { H3Event } from 'h3'
 export const CLOUDFLARE_BINDING_NAMES = ['AI', 'DB', 'BLOB', 'VECTORIZE', 'INDEXING_WORKFLOW'] as const
 export const CLOUDFLARE_SECRET_NAMES = [
   'IP_HASH_SECRET',
-  'LIBRARY_ADMIN_TOKEN'
+  'LIBRARY_ADMIN_TOKEN',
+  'LANGSMITH_API_KEY'
 ] as const
 export const CLOUDFLARE_CHAT_MODEL = '@cf/ibm-granite/granite-4.0-h-micro' as const
 export const CLOUDFLARE_EMBEDDING_MODEL = '@cf/qwen/qwen3-embedding-0.6b' as const
@@ -36,6 +37,13 @@ export type CloudflareRuntimeBindings = {
   QUESTION_DAILY_LIMIT?: string
   IP_HASH_SECRET?: string
   LIBRARY_ADMIN_TOKEN?: string
+  LANGSMITH_API_KEY?: string
+  LANGSMITH_TRACING?: string
+  LANGSMITH_PROJECT?: string
+  LANGSMITH_ENDPOINT?: string
+  LANGSMITH_WORKSPACE_ID?: string
+  APP_ENVIRONMENT?: string
+  ACTIVITY_DATABASE_NAME?: string
 }
 
 export type CloudflareConfig = {
@@ -83,7 +91,14 @@ function processEnvironment(): CloudflareRuntimeBindings {
     VECTORIZE_METRIC: process.env.VECTORIZE_METRIC,
     QUESTION_DAILY_LIMIT: process.env.QUESTION_DAILY_LIMIT,
     IP_HASH_SECRET: process.env.IP_HASH_SECRET,
-    LIBRARY_ADMIN_TOKEN: process.env.LIBRARY_ADMIN_TOKEN
+    LIBRARY_ADMIN_TOKEN: process.env.LIBRARY_ADMIN_TOKEN,
+    LANGSMITH_API_KEY: process.env.LANGSMITH_API_KEY,
+    LANGSMITH_TRACING: process.env.LANGSMITH_TRACING,
+    LANGSMITH_PROJECT: process.env.LANGSMITH_PROJECT,
+    LANGSMITH_ENDPOINT: process.env.LANGSMITH_ENDPOINT,
+    LANGSMITH_WORKSPACE_ID: process.env.LANGSMITH_WORKSPACE_ID,
+    APP_ENVIRONMENT: process.env.APP_ENVIRONMENT,
+    ACTIVITY_DATABASE_NAME: process.env.ACTIVITY_DATABASE_NAME
   }
 }
 

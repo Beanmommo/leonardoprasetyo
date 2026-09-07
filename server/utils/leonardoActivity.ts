@@ -1,17 +1,11 @@
 import { z } from 'zod'
+import { formatActivityDate } from '../../shared/utils/activityDate'
 
 export const leonardoActivityInputSchema = z.object({
   date: z.iso.date(),
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional().default(''),
   removeImage: z.boolean().optional().default(false)
-})
-
-const activityDateFormatter = new Intl.DateTimeFormat('en-CA', {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  timeZone: 'Australia/Melbourne'
 })
 
 export function serializeLeonardoActivity(activity: {
@@ -30,7 +24,7 @@ export function serializeLeonardoActivity(activity: {
     imageUrl: imageKey ? `/api/leonardo-activity/${activity.id}/image?v=${imageKey.split('/').at(-1)}` : null,
     // Preserve the calendar day displayed by the original timeline for older
     // timestamp-based entries. New date-only values are stored at midnight UTC.
-    date: activityDateFormatter.format(activity.date),
+    date: formatActivityDate(activity.date),
     createdAt: activity.createdAt.toISOString(),
     updatedAt: activity.updatedAt.toISOString()
   }
