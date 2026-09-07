@@ -13,7 +13,8 @@ const requiredWorkerSecrets = [
   'NUXT_OAUTH_GITHUB_CLIENT_ID',
   'NUXT_OAUTH_GITHUB_CLIENT_SECRET',
   'IP_HASH_SECRET',
-  'LIBRARY_ADMIN_TOKEN'
+  'LIBRARY_ADMIN_TOKEN',
+  'LANGSMITH_API_KEY'
 ]
 const wranglerCredentialNames = [
   'CLOUDFLARE_ACCOUNT_ID',
@@ -22,6 +23,11 @@ const wranglerCredentialNames = [
   'CLOUDFLARE_EMAIL'
 ]
 const generatedWorkerConfigNames = [
+  'APP_ENVIRONMENT',
+  'ACTIVITY_DATABASE_NAME',
+  'LANGSMITH_TRACING',
+  'LANGSMITH_PROJECT',
+  'LANGSMITH_ENDPOINT',
   'AI_GATEWAY_ID',
   'CHAT_MODEL',
   'EMBEDDING_PROVIDER',

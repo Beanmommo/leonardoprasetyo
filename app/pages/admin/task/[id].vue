@@ -178,7 +178,7 @@ onBeforeUnmount(pause)
           <span class="font-mono text-xs font-medium tracking-wider text-muted">~/admin/task/{{ String(route.params.id).slice(0, 8) }}</span>
         </template>
         <UButton
-          to="/admin?tab=tasks"
+          to="/admin/files?tab=tasks"
           label="All tasks"
           icon="i-lucide-arrow-left"
           color="neutral"

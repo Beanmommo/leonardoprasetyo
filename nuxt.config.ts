@@ -65,7 +65,8 @@ const requiredCloudflareSecrets = {
       'NUXT_OAUTH_GITHUB_CLIENT_ID',
       'NUXT_OAUTH_GITHUB_CLIENT_SECRET',
       'IP_HASH_SECRET',
-      'LIBRARY_ADMIN_TOKEN'
+      'LIBRARY_ADMIN_TOKEN',
+      'LANGSMITH_API_KEY'
     ]
   }
 } as const
@@ -93,7 +94,11 @@ export default defineNuxtConfig({
     // mutations also enforce a same-origin request in assertLibraryAdmin.
     // @ts-expect-error nuxt-csurf adds this route-rule key at runtime, but its
     // module augmentation is not visible through Nuxt 4's generated config type.
-    '/api/admin/library/**': { csurf: false }
+    '/api/admin/library/**': { csurf: false },
+    // @ts-expect-error See note above.
+    '/api/admin/leonardo-activity': { csurf: false },
+    // @ts-expect-error See note above.
+    '/api/admin/leonardo-activity/**': { csurf: false }
   },
 
   experimental: {
@@ -147,6 +152,11 @@ export default defineNuxtConfig({
           }
         }],
         vars: {
+          APP_ENVIRONMENT: usesCloudflareDevResources ? 'dev' : 'prod',
+          ACTIVITY_DATABASE_NAME: cloudflareDatabaseName,
+          LANGSMITH_TRACING: 'true',
+          LANGSMITH_PROJECT: usesCloudflareDevResources ? 'leonardo-chat-dev' : 'leonardo-chat-prod',
+          LANGSMITH_ENDPOINT: 'https://api.smith.langchain.com',
           AI_GATEWAY_ID: 'leonardoprasetyo',
           CHAT_MODEL: '@cf/ibm-granite/granite-4.0-h-micro',
           EMBEDDING_PROVIDER: 'workers-ai',

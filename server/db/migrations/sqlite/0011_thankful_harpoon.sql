@@ -1,0 +1,1 @@
+ALTER TABLE `leonardo_activities` ADD `image_key` text;

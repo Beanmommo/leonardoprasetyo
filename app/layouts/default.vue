@@ -131,6 +131,10 @@ defineShortcuts({
             kbds: ['meta', 'o'],
             icon: 'i-lucide-circle-plus'
           }, {
+            label: 'Activity',
+            to: '/leonardo-activity',
+            icon: 'i-lucide-activity'
+          }, {
             label: 'Library',
             to: '/library',
             icon: 'i-lucide-library-big',
@@ -169,6 +173,34 @@ defineShortcuts({
             </div>
           </template>
         </UNavigationMenu>
+
+        <UNavigationMenu
+          v-if="loggedIn"
+          :items="[{
+            'label': 'Admin',
+            'aria-label': 'Admin',
+            'icon': 'i-lucide-shield',
+            'type': 'trigger',
+            'defaultOpen': true,
+            'popover': { mode: 'click' },
+            'children': [{
+              label: 'Resume',
+              to: '/admin/resume',
+              icon: 'i-lucide-file-user'
+            }, {
+              label: 'RAG Document',
+              to: '/admin/files',
+              active: route.path === '/admin/files' || route.path.startsWith('/admin/task/'),
+              icon: 'i-lucide-files'
+            }, {
+              label: 'Activities',
+              to: '/admin/leonardo-activity',
+              icon: 'i-lucide-activity'
+            }]
+          }]"
+          :collapsed="collapsed"
+          orientation="vertical"
+        />
 
         <UNavigationMenu
           v-if="!collapsed"

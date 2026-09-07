@@ -218,3 +218,17 @@ export const questionUsage = sqliteTable('question_usage', {
   primaryKey({ columns: [table.usageDateUtc, table.ipHash] }),
   check('question_usage_count_range', sql`${table.questionCount} >= 0 AND ${table.questionCount} <= 5`)
 ])
+
+export const leonardoActivities = sqliteTable('leonardo_activities', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  date: integer('date', { mode: 'timestamp' }).notNull(),
+  order: integer('order').notNull().default(0),
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  imageKey: text('image_key'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
+}, table => [
+  index('leonardo_activities_order_idx').on(table.order),
+  check('leonardo_activities_title_not_empty', sql`length(trim(${table.title})) > 0`)
+])

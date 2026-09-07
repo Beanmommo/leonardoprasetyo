@@ -81,11 +81,11 @@ function normalizeCitations(value: unknown): PortfolioCitation[] {
       excerpt: typeof citation.excerpt === 'string' ? citation.excerpt : undefined,
       textPreview: typeof citation.textPreview === 'string' ? citation.textPreview : undefined
     }]
-  }).slice(0, 5)
+  }).slice(0, 25)
 }
 
 function getCitations(message: UIMessage): PortfolioCitation[] {
-  const part = message.parts.find(part => part.type === 'data-citations')
+  const part = message.parts.filter(part => part.type === 'data-citations').at(-1)
   return part && 'data' in part ? normalizeCitations(part.data) : []
 }
 
@@ -103,6 +103,9 @@ function citationUrl(citation: PortfolioCitation, page = citationPage(citation))
     ?? citation.url
     ?? (citation.uploadId ? `/api/library/files/${encodeURIComponent(citation.uploadId)}/content` : '/library')
   const candidateWithoutFragment = candidate.split('#', 1)[0]!
+  if (candidateWithoutFragment === '/leonardo-activity') {
+    return /^\/leonardo-activity(?:#activity-[\w%-]+)?$/.test(candidate) ? candidate : '/leonardo-activity'
+  }
   const base = candidateWithoutFragment === '/api/library/resume/content'
     || candidateWithoutFragment.startsWith('/api/library/files/')
     ? candidateWithoutFragment

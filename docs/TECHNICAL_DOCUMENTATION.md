@@ -1,17 +1,18 @@
 # Leonardo Prasetyo Portfolio and RAG Platform
 
-Technical documentation for the `leonardoprasetyo` repository. This document describes the current working tree as of 1 September 2026.
+Technical documentation for the `leonardoprasetyo` repository. This document describes the current working tree as of 7 September 2026.
 
 ## 1. System purpose
 
-The project is a public portfolio application built around a document-grounded AI assistant. Visitors can ask questions about Leonardo's professional background, inspect the PDF sources used to ground answers, browse the generated RAG chunks, and view a two-dimensional projection of their embeddings. An authenticated administration area supports publishing the canonical resume, adding other PDF knowledge sources, monitoring and retrying durable indexing tasks, and deleting non-resume documents.
+The project is a public portfolio application built around an AI assistant grounded in published documents and Leonardo's activity timeline. Visitors can ask questions about Leonardo's professional background and recent activities, inspect the sources used to ground answers, browse the generated RAG chunks, and view a two-dimensional projection of their embeddings. An authenticated administration area supports publishing the canonical resume, adding other PDF knowledge sources, monitoring and retrying durable indexing tasks, deleting non-resume documents, and managing activity entries.
 
-The application keeps public chat history in the visitor's browser. Server-side storage is reserved for authentication, document metadata, indexing state, quota enforcement, and retrieval data.
+The application keeps public chat history in the visitor's browser. Application storage holds authentication, document metadata, indexing state, quota enforcement, retrieval data, and activity entries. When tracing is enabled, LangSmith also receives chat inputs and outputs for debugging; this is separate from browser conversation persistence.
 
 ## 2. Technology stack
 
 - **Application:** Nuxt 4, Vue 3, TypeScript, Nuxt UI, Tailwind CSS
-- **AI orchestration:** Vercel AI SDK and `workers-ai-provider`
+- **AI orchestration:** Vercel AI SDK and `workers-ai-provider`, with a structured LangChain activity tool from `@langchain/core`
+- **AI observability:** LangSmith request traces for Library retrieval, model steps, tool calls, and answers
 - **Generation model:** Cloudflare Workers AI `@cf/ibm-granite/granite-4.0-h-micro`
 - **Embedding model:** Cloudflare Workers AI `@cf/qwen/qwen3-embedding-0.6b` (1,024 dimensions)
 - **Retrieval:** Cloudflare Vectorize with cosine similarity
@@ -31,6 +32,9 @@ flowchart LR
     Admin[GitHub-authenticated administrator] -->|Upload, index, monitor, delete| Worker
 
     Worker -->|Relational state and quotas| D1[(Cloudflare D1)]
+    Worker -->|Model requests an activity lookup| ActivityTool[LangChain activity tool]
+    ActivityTool -->|Read public activities through bound DB| D1
+    Worker -->|Request, model, and tool traces| LangSmith[LangSmith environment project]
     Worker -->|PDF objects and current resume| R2[(Cloudflare R2)]
     Worker -->|Query and document embeddings| AI[Workers AI via AI Gateway]
     Worker -->|Similarity search and vector previews| Vectorize[(Cloudflare Vectorize)]
@@ -46,12 +50,14 @@ Each environment deploys the same application and Workflow implementation with f
 | Binding | Service | Responsibility |
 | --- | --- | --- |
 | `AI` | Workers AI | Chat generation, query embeddings, document embeddings, and PDF-to-Markdown fallback |
-| `DB` | D1 | Users, uploads, chunks, tasks, publication lease, and daily question counters |
+| `DB` | D1 | Users, uploads, chunks, tasks, publication lease, daily question counters, and public activity entries |
 | `BLOB` | R2 | The canonical fixed-key resume and additive content-addressed Library PDFs |
 | `VECTORIZE` | Vectorize | Searchable chunk embeddings, isolated by ingestion-generation namespace |
 | `INDEXING_WORKFLOW` | Workflows | Durable resume/document indexing, step retries, and terminal failure recording |
 
 Model calls pass through AI Gateway with request metadata enabled and prompt/response payload logging disabled.
+
+LangSmith tracing is configured separately and records model messages, outputs, and tool results. The LangChain tool runs inside the existing Worker; no separate agent service or LangGraph Agent Server is deployed.
 
 ## 4. Main user experiences
 
@@ -60,6 +66,8 @@ Model calls pass through AI Gateway with request metadata enabled and prompt/res
 The landing page offers suggested questions and creates a browser-local chat. The chat page streams responses, stores up to 50 conversations in `localStorage`, supports rename/delete/edit/regenerate actions, and groups citations by source file and page.
 
 Only the eight most recent user/assistant messages are sent to the server. The legacy server chat, vote, and upload routes return HTTP 410, making browser storage the active persistence model for public conversations.
+
+For questions about recent work or milestones, chat can query the public activity timeline and add activity citations alongside Library citations. Activity source links open `/leonardo-activity` at the cited entry.
 
 ### Public Library and RAG database
 
@@ -151,11 +159,48 @@ For each question, the server:
 4. queries Vectorize for up to 20 candidates across all published sources;
 5. reloads authoritative current-generation chunk text from D1, rejects stale matches, preserves Vectorize ranking, and keeps the top five;
 6. builds source citations and a bounded context block;
-7. streams a Granite response and citation metadata to the browser.
+7. lets Granite invoke the activity tool when the question needs timeline information;
+8. streams the answer and updated Library/activity citation metadata to the browser, then finalizes the LangSmith trace.
 
-Each retrieved chunk contributes at most 3,500 characters to the model context and a 280-character citation excerpt to the client. Generation is capped at 800 output tokens.
+Each retrieved chunk contributes at most 3,500 characters to the model context and a 280-character citation excerpt to the client. Each model step is capped at 800 output tokens. A request permits at most three model steps, with tools disabled for the third step so the model can complete its answer.
 
 The system prompt restricts answers to Leonardo's published professional information. Retrieved PDF text is encoded as JSON and markup delimiters are neutralised so indexed content remains an untrusted data boundary rather than executable instructions.
+
+### 6.1 LangChain activity tool
+
+`server/ai/tools/leonardoActivity.ts` creates the LangChain `search_leonardo_activity` tool for each request and adapts it to the AI SDK's tool interface. `server/utils/leonardoActivitySearch.ts` owns input validation and the parameterized, read-only D1 query.
+
+| Input | Behaviour |
+| --- | --- |
+| `query` | Optional literal phrase, at most 160 characters, matched against title and description |
+| `fromDate` / `toDate` | Optional inclusive `YYYY-MM-DD` bounds; start must not follow end |
+| `limit` | Integer from 1 to 10, default 5 |
+
+The tool receives the current request's `DB` binding. Neither the browser nor model can supply a database, environment, or SQL statement. Development therefore reads `leonardoprasetyo-dev`, and production reads `leonardoprasetyo-prod`, with no cross-environment fallback.
+
+Results include only public activity IDs, dates, bounded titles/descriptions, and timeline links. They are ordered by date descending, then editorial order and ID. Date filters and displayed dates use `Australia/Melbourne`, including daylight-saving transitions, through `shared/utils/activityDate.ts`. An extra row detects truncation and sets `hasMore` without claiming the response lists every match.
+
+Each request permits at most two activity lookups. Cancellation is checked before and after the query. Citation labels remain stable across both lookups, and the browser uses the latest citation update. The model is instructed to treat activity content as reference data, distinguish failed lookups from empty results, and avoid inventing missing entries. Granite's occasional double-encoded JSON arguments are repaired only when the decoded object passes the complete tool schema.
+
+### 6.2 LangSmith tracing and workflow inspection
+
+`server/utils/chatTracing.ts` creates a request-scoped LangSmith client using the current environment's service key and project. The trace starts after validation and quota reservation. A typical successful activity request has this structure:
+
+```text
+portfolio-chat
+  retrieve_library_context
+  portfolio-answer
+    workersai.chat
+    search_leonardo_activity          AI SDK tool call
+      search_leonardo_activity        LangChain invocation
+    workersai.chat                    Answer using the tool result
+```
+
+The two nested activity spans describe the adapter call and its LangChain invocation, not two D1 lookups. Model/tool steps vary with the question. Root metadata identifies `environment`, `database`, and `route`; the database label is diagnostic metadata, while the actual `DB` binding controls access.
+
+Open LangSmith's **Tracing** page and select `leonardo-chat-dev` or `leonardo-chat-prod`, then open a `portfolio-chat` run to inspect inputs, retrieval, model calls, tool arguments/results, timings, and errors. This integration is available through Tracing; Studio would require a separately configured Agent Server.
+
+Trace completion is awaited at the end of streaming and registered with the Worker's `waitUntil`. The client flushes pending batches with bounded request timeout/retries. Delivery failures produce a generic `CHAT_TRACING_ERROR` log without replacing the chat answer. Request cancellation, retrieval failures, and terminal generation failures close the root trace with an error; a recovered tool error remains visible on its child span without marking a subsequently successful answer as failed.
 
 ## 7. Data model
 
@@ -169,6 +214,7 @@ The system prompt restricts answers to Leonardo's published professional informa
 | `indexing_tasks` | Workflow instance, processing stage, progress, extraction result, attempts, and errors |
 | `resume_ingestion_leases` | Singleton renewable lease protecting publication and deletion |
 | `question_usage` | HMAC-derived IP identifier and daily UTC question count |
+| `leonardo_activities` | Public timeline dates, titles, descriptions, editorial order, and optional image reference |
 
 `uploads` has a partial unique index allowing only one non-deleted `resume` row. There is no single-active-document constraint: multiple `document` rows and the resume can be active RAG sources simultaneously. `document_chunks` is unique by Vectorize ID and by upload/generation/chunk index.
 
@@ -182,7 +228,8 @@ The system prompt restricts answers to Leonardo's published professional informa
 
 | Method and route | Purpose |
 | --- | --- |
-| `POST /api/chat` | Validate, rate-limit, retrieve, and stream a grounded answer |
+| `POST /api/chat` | Validate, rate-limit, retrieve Library context, optionally call the activity tool, trace, and stream a grounded answer |
+| `GET /api/leonardo-activity` | Return the public activity timeline |
 | `GET /api/library/files` | List public active documents; `role=all` also includes the resume |
 | `GET /api/library/files/:id` | Return public document metadata |
 | `GET /api/library/files/:id/content` | Stream the public PDF with range support |
@@ -213,21 +260,25 @@ The system prompt restricts answers to Leonardo's published professional informa
 - Public usage is capped at five questions per network per UTC day. The application stores an HMAC-SHA-256 of the canonical client IP, not the raw IP. A scheduled task removes usage rows older than seven days.
 - R2 filenames are sanitised, PDFs are signature-checked, and stored objects use checksums and restrictive response headers. Resume uploads are additionally parsed and normalized so the embedded PDF title agrees with the canonical filename.
 - AI Gateway payload collection is disabled for both generation and embeddings.
+- LangSmith tracing separately records the question, model messages and outputs, retrieved public excerpts, activity filters/results, timing, and errors. Request headers, cookies, client IPs, credentials, and Worker binding objects are not supplied as tracing fields. User-entered text can still contain personal information and is included in model traces.
+- LangSmith keys are separate workspace-scoped service keys for development and production. Local environment files are ignored by Git; production uses an encrypted Worker secret. Keys are not placed in Wrangler `vars` or public runtime configuration.
 - Public Library and retrieval queries require each source's exact active ingestion generation, preventing stale or partially published data from leaking into results.
 
 ## 10. Configuration and deployment
 
-Development and production compile the same application and `LibraryIndexingWorkflow` implementation, but deploy separate Workers and bind separate data-plane resources:
+Local development and production compile the same application and `LibraryIndexingWorkflow` implementation. Local development runs the Worker and Workflow in Wrangler's emulator with remote development storage; only `main` deploys the production Worker through GitHub Actions:
 
-| Resource | Development | Production |
+| Resource | Local development | Production |
 | --- | --- | --- |
-| Worker | `leonardoprasetyo-dev` | `leonardoprasetyo` |
+| Worker | Local emulator | `leonardoprasetyo` |
 | D1 | `leonardoprasetyo-dev` | `leonardoprasetyo-prod` |
 | R2 | `leonardoprasetyo-uploads-dev` | `leonardoprasetyo-uploads-prod` |
 | Vectorize | `leonardoprasetyo-documents-dev` | `leonardoprasetyo-documents-prod` |
-| Workflow | `leonardoprasetyo-library-indexing-dev` | `leonardoprasetyo-library-indexing-prod` |
+| Workflow | `leonardoprasetyo-library-indexing-dev` (local emulator) | `leonardoprasetyo-library-indexing-prod` |
+| LangSmith project | `leonardo-chat-dev` | `leonardo-chat-prod` |
+| LangSmith key source | Ignored root `.env` | Encrypted `LANGSMITH_API_KEY` Worker secret |
 
-The `-prod` Workflow is used only by the production deployment; development binds only to the `-dev` Workflow. `CLOUDFLARE_DEPLOY_ENV=dev|prod` selects the deployment target, while `CLOUDFLARE_LOCAL_DEV=1` selects remote development storage for local testing. Production and development builds both reject missing or placeholder D1 UUIDs for their selected environment.
+CI uses `CLOUDFLARE_DEPLOY_ENV=prod` to validate the production bundle on `main` and pull requests targeting `main`. Development runs locally with `pnpm run dev:local`; pushes and pull requests targeting `dev` do not trigger GitHub Actions. `CLOUDFLARE_LOCAL_DEV=1` selects remote development storage for local testing. Builds reject missing or placeholder D1 UUIDs for their selected environment.
 
 Required secrets:
 
@@ -237,7 +288,12 @@ NUXT_OAUTH_GITHUB_CLIENT_ID
 NUXT_OAUTH_GITHUB_CLIENT_SECRET
 IP_HASH_SECRET
 LIBRARY_ADMIN_TOKEN
+LANGSMITH_API_KEY
 ```
+
+`nuxt.config.ts` generates `LANGSMITH_TRACING=true`, the environment-specific `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT=https://api.smith.langchain.com`, `APP_ENVIRONMENT`, and `ACTIVITY_DATABASE_NAME`. The development launcher loads the secret from `.env` but preserves these generated configuration values; changing `LANGSMITH_PROJECT` in `.env` does not reroute local traces. Tracing requires both an enabled flag and a key. For a persistent tracing toggle, update the generated setting in `nuxt.config.ts` and rebuild/redeploy; a dashboard-only override can be replaced by a later deployment.
+
+The ignored `.env.production` holds a local backup of the production key and is not loaded by the development launcher. The [Cloudflare runbook](../infra/cloudflare/README.md#activity-chat-tool-and-langsmith-tracing) covers workspace scope, independent key rotation, dashboard access, and deployment verification.
 
 Primary commands:
 
@@ -245,16 +301,16 @@ Primary commands:
 pnpm install
 pnpm lint
 pnpm typecheck
+pnpm test:activity-tool
 pnpm build
 pnpm dev:local
 pnpm cloudflare:dry-run
 pnpm cloudflare:migrate:dev
 pnpm cloudflare:migrate:prod
-pnpm cloudflare:deploy:dev
 pnpm cloudflare:deploy:prod
 ```
 
-`pnpm dev:local` builds the Worker, applies migrations to the remote development D1 database, and starts Wrangler on port 8787. Workers AI, development D1, development R2, and development Vectorize are remote bindings; the Workflow runs in Wrangler's local emulator with the same implementation. The `dev` branch deploys development and `main` deploys production through GitHub Actions. The detailed resource-provisioning and deployment procedure is maintained in [`infra/cloudflare/README.md`](../infra/cloudflare/README.md).
+`pnpm dev:local` builds the Worker, applies migrations to the remote development D1 database, and starts Wrangler on port 8787. Workers AI, development D1, development R2, and development Vectorize are remote bindings; the Workflow runs in Wrangler's local emulator with the same implementation. `main` deploys production through GitHub Actions. The detailed resource-provisioning and deployment procedure is maintained in [`infra/cloudflare/README.md`](../infra/cloudflare/README.md).
 
 ## 11. Repository map
 
@@ -264,12 +320,15 @@ app/
   composables/           Browser-local chat and model state
   pages/                 Public chat/Library pages and private admin pages
 server/
-  api/chat.post.ts       Public RAG chat endpoint
+  ai/tools/             Request-scoped LangChain activity tool and AI SDK adapter
+  api/chat.post.ts       Public chat endpoint with Library retrieval and activity tools
   api/library/           Public read-only Library APIs
   api/admin/library/     Authenticated upload, indexing, resume, and task APIs
   db/                    Drizzle schema and D1 migrations
   runtime/               Cloudflare Worker/Workflow entry and body-size enforcement
-  utils/                 Ingestion, retrieval, bindings, quotas, and storage helpers
+  utils/                 Ingestion, retrieval, activity queries, tracing, bindings, and quotas
+shared/utils/            Shared activity calendar-date handling
+tests/                   Activity tool and image tests
 infra/cloudflare/        Binding contract, AI Gateway configuration, and runbook
 scripts/                 Local Cloudflare development launcher
 public/                  Static brand assets and fallback resume
@@ -285,4 +344,5 @@ public/                  Static brand assets and fallback resume
 - Public chat history is device- and origin-local. It does not follow a user between browsers and is not recoverable from the server.
 - The vector/PCA endpoint selects the requested active upload, or the most recently indexed active source when no `uploadId` is supplied. The plot is computed per returned page of embeddings and is not a globally stable semantic coordinate system.
 - Retrieval is dense-vector-only with a fixed top-five result count; there is no keyword/hybrid reranker in the current implementation.
-- The repository does not currently expose a formal automated test suite in `package.json`; linting, TypeScript validation, build/dry-run checks, and the documented local Worker exercise are the primary verification gates.
+- `pnpm test:activity-tool` verifies query bounds, public field projection, literal search, date validation and Melbourne daylight-saving boundaries, environment isolation, citation stability, lookup limits, cancellation, and safe argument repair. CI runs this suite alongside lint, typecheck, build, and Worker dry-run checks. The real D1/model/stream/tracing path is exercised with `pnpm run dev:local`; stop its retained terminal session after testing and confirm port 8787 is clear.
+- Activity lookup reads current D1 rows directly; publishing an activity does not require embedding or Library ingestion. Development and production timelines can contain different entries, including an empty production timeline.
