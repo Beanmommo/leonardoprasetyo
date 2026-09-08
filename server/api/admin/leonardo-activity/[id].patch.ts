@@ -1,12 +1,14 @@
 import { db, schema } from 'hub:db'
 import { eq } from 'drizzle-orm'
 import { z } from 'zod'
+import { changedActivityDateOrder } from '../../../utils/activityOrdering'
 
 export default defineEventHandler(async (event) => {
   setResponseHeader(event, 'Cache-Control', 'no-store')
   await assertLibraryAdmin(event)
   const { id } = await getValidatedRouterParams(event, z.object({ id: z.string().uuid() }).parse)
   const { input, image } = await readActivitySubmission(event)
+  await ensureActivityDatesNormalized()
   const existing = await db.query.leonardoActivities.findFirst({
     where: eq(schema.leonardoActivities.id, id),
     columns: { id: true }
@@ -22,6 +24,7 @@ export default defineEventHandler(async (event) => {
         .from(schema.leonardoActivities).where(eq(schema.leonardoActivities.id, id)),
       db.update(schema.leonardoActivities).set({
         date: new Date(input.date),
+        order: changedActivityDateOrder(input.date),
         title: input.title,
         description: input.description,
         imageKey: input.removeImage ? null : imageKey,
