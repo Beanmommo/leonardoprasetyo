@@ -214,7 +214,8 @@ Trace completion is awaited at the end of streaming and registered with the Work
 | `indexing_tasks` | Workflow instance, processing stage, progress, extraction result, attempts, and errors |
 | `resume_ingestion_leases` | Singleton renewable lease protecting publication and deletion |
 | `question_usage` | HMAC-derived IP identifier and daily UTC question count |
-| `leonardo_activities` | Public timeline dates, titles, descriptions, editorial order, and optional image reference |
+| `leonardo_activities` | Calendar dates, titles, descriptions, order within each day, and optional image reference |
+| `activity_feed_state` | Cursor revision and completion marker for legacy date normalization |
 
 `uploads` has a partial unique index allowing only one non-deleted `resume` row. There is no single-active-document constraint: multiple `document` rows and the resume can be active RAG sources simultaneously. `document_chunks` is unique by Vectorize ID and by upload/generation/chunk index.
 
@@ -229,7 +230,7 @@ Trace completion is awaited at the end of streaming and registered with the Work
 | Method and route | Purpose |
 | --- | --- |
 | `POST /api/chat` | Validate, rate-limit, retrieve Library context, optionally call the activity tool, trace, and stream a grounded answer |
-| `GET /api/leonardo-activity` | Return the public activity timeline |
+| `GET /api/leonardo-activity` | Return `{ activities, nextCursor }`; optional `limit` (default 20, maximum 50) and opaque `cursor` |
 | `GET /api/library/files` | List public active documents; `role=all` also includes the resume |
 | `GET /api/library/files/:id` | Return public document metadata |
 | `GET /api/library/files/:id/content` | Stream the public PDF with range support |
@@ -239,6 +240,25 @@ Trace completion is awaited at the end of streaming and registered with the Work
 | `GET /api/library/resume/content` | Serve the fixed-key resume with synchronized filename/title metadata, or redirect to the built-in fallback |
 
 ### Administrator
+
+Activities sort by calendar day descending, then saved order and ID ascending. New
+entries prepend within their selected day using an atomic `MIN(order) - 1`; deletes
+leave gaps. Up/down controls swap only same-day neighbors, and return only affected
+activities. Content edits preserve position; changing the date prepends the entry
+within its destination day. The admin derives visible positions from each day's list.
+
+The public timeline appends cursor pages on scroll, with a retry button and an end
+state. Cursors include the last date/order/ID and a revision. A database trigger
+increments that revision when an existing date or order changes; stale cursors
+receive HTTP 409 and the UI offers to refresh from the beginning. Inserts, deletes,
+and content edits do not shift existing cursor positions. Chat activity anchors
+load subsequent pages until the cited activity can be shown.
+
+Migration `0012` creates the composite index and feed state. On first activity
+access, a resumable backfill normalizes legacy timestamps to UTC midnight of their
+previously displayed `Australia/Melbourne` day using the runtime's IANA timezone
+data. It keeps existing ranks and timestamps for creation/update intact. The state
+marker avoids rescanning after completion. New writes already store calendar dates.
 
 | Method and route | Purpose |
 | --- | --- |

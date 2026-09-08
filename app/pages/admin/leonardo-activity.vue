@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn, TabsItem } from '@nuxt/ui'
-import { LazyActivityCropModal, LazyModalConfirm } from '#components'
-import { ACTIVITY_IMAGE_SOURCE_MAX_BYTES } from '#shared/utils/activityImage'
+import { LazyActivityCropModal, LazyActivityPictureModal, LazyModalConfirm } from '#components'
 import type {
   LeonardoActivitiesResponse,
   LeonardoActivity,
@@ -26,21 +25,41 @@ const toast = useToast()
 const overlay = useOverlay()
 const deleteModal = overlay.create(LazyModalConfirm)
 const cropModal = overlay.create(LazyActivityCropModal)
-const pictureInput = useTemplateRef('pictureInput')
-const croppedPicture = shallowRef<File | null>(null)
-const croppedPictureUrl = ref('')
+const pictureModal = overlay.create(LazyActivityPictureModal)
+const selectedPicture = shallowRef<File | null>(null)
+const selectedPictureUrl = ref('')
 const existingPictureUrl = ref<string | null>(null)
 const removePicture = ref(false)
-const croppingPicture = ref(false)
-const picturePreview = computed(() => croppedPictureUrl.value || (!removePicture.value && existingPictureUrl.value) || '')
+const choosingPicture = ref(false)
+const picturePreview = computed(() => selectedPictureUrl.value || (!removePicture.value && existingPictureUrl.value) || '')
 const activities = ref<LeonardoActivity[]>([])
+const dayPositions = computed(() => {
+  const counts = new Map<string, number>()
+  return activities.value.map((activity) => {
+    const position = (counts.get(activity.date) ?? 0) + 1
+    counts.set(activity.date, position)
+    return position
+  })
+})
+
+function canMoveWithinDay(index: number, direction: 'up' | 'down') {
+  const neighbor = activities.value[index + (direction === 'up' ? -1 : 1)]
+  return Boolean(neighbor && neighbor.date === activities.value[index]?.date)
+}
+
+function mergeActivities(updated: LeonardoActivity[]) {
+  const entries = new Map(activities.value.map(activity => [activity.id, activity]))
+  for (const activity of updated) entries.set(activity.id, activity)
+  activities.value = [...entries.values()].sort((a, b) =>
+    b.date.localeCompare(a.date) || a.order - b.order || a.id.localeCompare(b.id))
+}
 const loading = ref(false)
 const loadError = ref<string | null>(null)
 const saving = ref(false)
 const deletingId = ref<string | null>(null)
 const editingId = ref<string | null>(null)
 const reorderingId = ref<string | null>(null)
-const busy = computed(() => saving.value || croppingPicture.value || Boolean(deletingId.value) || Boolean(reorderingId.value))
+const busy = computed(() => saving.value || choosingPicture.value || Boolean(deletingId.value) || Boolean(reorderingId.value))
 
 const {
   data: adminSession,
@@ -101,7 +120,7 @@ async function loadActivities() {
 }
 
 function resetForm() {
-  clearCroppedPicture()
+  clearSelectedPicture()
   existingPictureUrl.value = null
   removePicture.value = false
   editingId.value = null
@@ -110,7 +129,7 @@ function resetForm() {
 
 function editActivity(activity: LeonardoActivity) {
   if (busy.value || loading.value) return
-  clearCroppedPicture()
+  clearSelectedPicture()
   existingPictureUrl.value = activity.imageUrl
   removePicture.value = false
   editingId.value = activity.id
@@ -121,39 +140,35 @@ function editActivity(activity: LeonardoActivity) {
   })
 }
 
-function clearCroppedPicture() {
-  if (croppedPictureUrl.value) URL.revokeObjectURL(croppedPictureUrl.value)
-  croppedPictureUrl.value = ''
-  croppedPicture.value = null
+function clearSelectedPicture() {
+  if (selectedPictureUrl.value) URL.revokeObjectURL(selectedPictureUrl.value)
+  selectedPictureUrl.value = ''
+  selectedPicture.value = null
 }
 
-onBeforeUnmount(clearCroppedPicture)
+onBeforeUnmount(clearSelectedPicture)
 
 function removeSelectedPicture() {
-  clearCroppedPicture()
+  clearSelectedPicture()
   removePicture.value = true
 }
 
-async function choosePicture(event: Event) {
-  const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  target.value = ''
-  if (!file || busy.value || loading.value) return
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > ACTIVITY_IMAGE_SOURCE_MAX_BYTES) {
-    toast.add({ title: 'Choose a JPEG, PNG, or WebP picture up to 10 MiB', color: 'error' })
-    return
-  }
-  croppingPicture.value = true
+async function choosePicture() {
+  if (busy.value || loading.value) return
+  choosingPicture.value = true
   try {
-    const instance = cropModal.open({ file })
-    const cropped = await instance.result
-    if (!cropped) return
-    clearCroppedPicture()
-    croppedPicture.value = cropped
-    croppedPictureUrl.value = URL.createObjectURL(cropped)
+    const selection = await pictureModal.open({ activities: activities.value }).result
+    if (!selection) return
+    const file = selection.source === 'new'
+      ? await cropModal.open({ file: selection.file }).result
+      : selection.file
+    if (!file) return
+    clearSelectedPicture()
+    selectedPicture.value = file
+    selectedPictureUrl.value = URL.createObjectURL(file)
     removePicture.value = false
   } finally {
-    croppingPicture.value = false
+    choosingPicture.value = false
   }
 }
 
@@ -170,10 +185,10 @@ async function saveActivity() {
 
   try {
     let body: LeonardoActivityInput | FormData = input
-    if (croppedPicture.value) {
+    if (selectedPicture.value) {
       body = new FormData()
       body.append('data', JSON.stringify(input))
-      body.append('image', croppedPicture.value)
+      body.append('image', selectedPicture.value)
     }
     const response = editingId.value
       ? await $fetch<LeonardoActivityResponse>(`/api/admin/leonardo-activity/${editingId.value}`, {
@@ -185,7 +200,7 @@ async function saveActivity() {
           body
         })
 
-    await loadActivities()
+    mergeActivities([response.activity])
     void refreshNuxtData('leonardo-activity')
     toast.add({
       title: editingId.value ? 'Activity updated' : 'Activity published',
@@ -218,7 +233,7 @@ async function removeActivity(activity: LeonardoActivity) {
   deletingId.value = activity.id
   try {
     await $fetch(`/api/admin/leonardo-activity/${activity.id}`, { method: 'DELETE' })
-    await loadActivities()
+    activities.value = activities.value.filter(entry => entry.id !== activity.id)
     if (editingId.value === activity.id) resetForm()
     void refreshNuxtData('leonardo-activity')
     toast.add({
@@ -248,7 +263,7 @@ async function moveActivity(activity: LeonardoActivity, direction: LeonardoActiv
       method: 'PATCH',
       body: { direction }
     })
-    activities.value = response.activities
+    mergeActivities(response.activities)
     void refreshNuxtData('leonardo-activity')
     toast.add({ title: 'Activity order saved', color: 'success', icon: 'i-lucide-arrow-up-down' })
   } catch (error) {
@@ -270,7 +285,7 @@ const tabs: TabsItem[] = [
 ]
 
 const columns: TableColumn<LeonardoActivity>[] = [
-  { id: 'order', header: 'Order' },
+  { id: 'order', header: 'Order in day' },
   { accessorKey: 'title', header: 'Activity' },
   {
     id: 'date',
@@ -333,7 +348,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
           />
 
           <div class="grid items-start gap-8 xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-            <UCard class="lg:sticky lg:top-6">
+            <UCard class="xl:sticky xl:top-6">
               <template #header>
                 <div class="flex items-center justify-between gap-3">
                   <div>
@@ -391,7 +406,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                     />
                   </UFormField>
 
-                  <UFormField label="Timeline picture" description="Optional. Crop a picture to use as this activity’s avatar.">
+                  <UFormField label="Timeline picture" description="Optional. Choose an uploaded picture or upload and crop a new one.">
                     <div class="mt-2 flex items-center gap-3">
                       <UAvatar
                         :src="picturePreview || undefined"
@@ -405,7 +420,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                           icon="i-lucide-image-plus"
                           color="neutral"
                           variant="outline"
-                          @click="pictureInput?.click()"
+                          @click="choosePicture"
                         />
                         <UButton
                           v-if="picturePreview"
@@ -416,15 +431,8 @@ const columns: TableColumn<LeonardoActivity>[] = [
                         />
                       </div>
                     </div>
-                    <input
-                      ref="pictureInput"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      class="hidden"
-                      @change="choosePicture"
-                    >
-                    <p v-if="croppedPicture" class="mt-2 text-xs text-muted">
-                      Your cropped picture will upload when you save this activity.
+                    <p v-if="selectedPicture" class="mt-2 text-xs text-muted">
+                      Your chosen picture will be saved with this activity.
                     </p>
                   </UFormField>
 
@@ -446,7 +454,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                     Published activities
                   </h2>
                   <p class="mt-1 text-sm text-muted">
-                    {{ activities.length }} {{ activities.length === 1 ? 'entry' : 'entries' }} · Use the arrows to reorder. New entries appear first.
+                    {{ activities.length }} {{ activities.length === 1 ? 'entry' : 'entries' }} · Newest days first. Use the arrows to reorder within a day. New entries appear first in their day.
                   </p>
                 </div>
                 <UButton
@@ -489,10 +497,10 @@ const columns: TableColumn<LeonardoActivity>[] = [
                       size="xs"
                       :aria-label="`Move ${row.original.title} up`"
                       title="Move up"
-                      :disabled="busy || loading || row.index === 0"
+                      :disabled="busy || loading || !canMoveWithinDay(row.index, 'up')"
                       @click="moveActivity(row.original, 'up')"
                     />
-                    <span class="min-w-5 text-center text-xs tabular-nums text-muted">{{ row.original.order + 1 }}</span>
+                    <span class="min-w-5 text-center text-xs tabular-nums text-muted">{{ dayPositions[row.index] }}</span>
                     <UButton
                       icon="i-lucide-arrow-down"
                       color="neutral"
@@ -500,7 +508,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                       size="xs"
                       :aria-label="`Move ${row.original.title} down`"
                       title="Move down"
-                      :disabled="busy || loading || row.index === activities.length - 1"
+                      :disabled="busy || loading || !canMoveWithinDay(row.index, 'down')"
                       @click="moveActivity(row.original, 'down')"
                     />
                   </div>

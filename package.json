@@ -12,6 +12,7 @@
     "typecheck": "nuxt typecheck",
     "test:activity-image": "node --experimental-strip-types --test tests/activityImage.test.ts",
     "test:activity-tool": "node --experimental-strip-types --test tests/activityTool.test.mjs",
+    "test:activity-feed": "node --experimental-strip-types --test tests/activityFeed.test.mjs",
     "db:generate": "nuxt db generate",
     "db:migrate": "nuxt db migrate",
     "cloudflare:types": "wrangler types --config .output/server/wrangler.json",

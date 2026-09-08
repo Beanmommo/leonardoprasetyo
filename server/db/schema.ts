@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, index, uniqueIndex, primaryKey, check } from 'drizzle-orm/sqlite-core'
-import { relations, sql } from 'drizzle-orm'
+import { desc, relations, sql } from 'drizzle-orm'
 
 const timestamps = {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
@@ -229,6 +229,13 @@ export const leonardoActivities = sqliteTable('leonardo_activities', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
 }, table => [
-  index('leonardo_activities_order_idx').on(table.order),
+  index('leonardo_activities_day_order_idx').on(desc(table.date), table.order, table.id),
   check('leonardo_activities_title_not_empty', sql`length(trim(${table.title})) > 0`)
 ])
+
+// Singleton used to invalidate cursors after an existing item changes position.
+export const activityFeedState = sqliteTable('activity_feed_state', {
+  id: integer('id').primaryKey(),
+  revision: integer('revision').notNull().default(0),
+  datesNormalized: integer('dates_normalized', { mode: 'boolean' }).notNull().default(false)
+})

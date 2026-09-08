@@ -377,6 +377,7 @@ export default defineEventHandler(async (event) => {
           tools: {
             search_leonardo_activity: createLeonardoActivityTool({
               database: runtime.DB,
+              prepareActivities: ensureActivityDatesNormalized,
               signal: requestSignal,
               tracingEnabled: tracing.enabled,
               onCitations: citations => writer.write({

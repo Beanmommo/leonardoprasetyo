@@ -15,6 +15,7 @@ export function createLeonardoActivityTool(options: {
   database: ActivitySearchDatabase
   signal: AbortSignal
   tracingEnabled: boolean
+  prepareActivities?: () => Promise<void>
   onCitations: (citations: ActivityCitation[]) => void
 }) {
   const citations = new Map<string, ActivityCitation>()
@@ -23,6 +24,8 @@ export function createLeonardoActivityTool(options: {
     options.signal.throwIfAborted()
     if (lookupCount >= 2) throw new Error('Activity lookup limit reached; use the results already returned.')
     lookupCount++
+    await options.prepareActivities?.()
+    options.signal.throwIfAborted()
     const result = await searchLeonardoActivities(options.database, input)
     options.signal.throwIfAborted()
     const activities = result.activities.map((activity) => {

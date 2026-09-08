@@ -85,6 +85,13 @@
       "when": 1788751560389,
       "tag": "0011_thankful_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788778330017,
+      "tag": "0012_spooky_satana",
+      "breakpoints": true
     }
   ]
 }

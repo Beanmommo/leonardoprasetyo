@@ -1,5 +1,11 @@
 import { z } from 'zod'
+import { db } from 'hub:db'
 import { formatActivityDate } from '../../shared/utils/activityDate'
+import { normalizeActivityDates } from './activityDateMigration'
+
+export async function ensureActivityDatesNormalized() {
+  await normalizeActivityDates(db)
+}
 
 export const leonardoActivityInputSchema = z.object({
   date: z.iso.date(),

@@ -13,6 +13,10 @@ export interface LeonardoActivitiesResponse {
   activities: LeonardoActivity[]
 }
 
+export interface LeonardoActivitiesPageResponse extends LeonardoActivitiesResponse {
+  nextCursor: string | null
+}
+
 export interface LeonardoActivityResponse {
   activity: LeonardoActivity
 }
