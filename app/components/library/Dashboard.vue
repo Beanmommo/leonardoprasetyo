@@ -142,7 +142,6 @@ const fileFilterItems = computed(() => files.value.map(file => ({
 const vectorPageStart = computed(() => vectorTotal.value ? (vectorPage.value - 1) * RAG_PAGE_SIZE + 1 : 0)
 const vectorPageEnd = computed(() => Math.min(vectorPage.value * RAG_PAGE_SIZE, vectorTotal.value))
 const vectorColumns: TableColumn<LibraryVector>[] = [
-  { accessorKey: 'chunkIndex', header: 'Chunk' },
   {
     id: 'page',
     accessorFn: vector => vector.pageNumber ?? '—',
@@ -681,14 +680,10 @@ async function refreshLibrary() {
                 :columns="vectorColumns"
                 :loading="vectorsLoading"
                 empty="No indexed chunks available."
-                class="overflow-hidden rounded-xl border border-default bg-default"
+                class="overflow-x-auto rounded-xl border border-default bg-default"
                 :ui="{ tr: 'data-[selectable=true]:cursor-pointer' }"
                 @select="selectVector"
               >
-                <template #chunkIndex-cell="{ row }">
-                  <span class="font-medium text-highlighted">Chunk {{ row.original.chunkIndex }}</span>
-                </template>
-
                 <template #sourceFilename-cell="{ row }">
                   <a
                     :href="row.original.sourceFileUrl"
