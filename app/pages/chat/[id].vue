@@ -396,7 +396,7 @@ function vote(message: UIMessage, isUpvoted: boolean) {
     </template>
 
     <template #body>
-      <UContainer class="flex-1 flex flex-col gap-4 sm:gap-6">
+      <UContainer class="flex-1 flex flex-col gap-4 pb-4 sm:gap-6 sm:pb-6">
         <UAlert
           v-if="storageError"
           color="warning"
@@ -459,7 +459,7 @@ function vote(message: UIMessage, isUpvoted: boolean) {
           </template>
         </UChatMessages>
 
-        <div class="sticky bottom-0 z-10 flex flex-col gap-2">
+        <div class="sticky bottom-4 z-10 flex shrink-0 flex-col gap-2 sm:bottom-6">
           <p
             v-if="cachedQuotaExhausted"
             class="self-center rounded-full bg-elevated px-3 py-1.5 text-xs font-medium text-muted ring ring-default"
@@ -474,7 +474,7 @@ function vote(message: UIMessage, isUpvoted: boolean) {
             placeholder="Ask a follow-up about Leonardo..."
             color="neutral"
             variant="subtle"
-            class="[view-transition-name:chat-prompt] rounded-b-none"
+            class="[view-transition-name:chat-prompt] rounded-2xl bg-default/95 shadow-lg"
             :ui="{ base: 'px-1.5' }"
             @submit="handleSubmit"
           >
