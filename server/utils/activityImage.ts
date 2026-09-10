@@ -15,7 +15,7 @@ export async function readActivitySubmission(event: H3Event) {
   if (!parts || data?.length !== 1 || images?.length !== 1 || parts.length !== 2 || !data[0] || !images[0]) {
     throw createError({ statusCode: 400, statusMessage: 'Provide activity data and one cropped picture' })
   }
-  if (data[0].data.byteLength > 16 * 1024 || images[0].data.byteLength > ACTIVITY_IMAGE_UPLOAD_MAX_BYTES) {
+  if (data[0].data.byteLength > 640 * 1024 || images[0].data.byteLength > ACTIVITY_IMAGE_UPLOAD_MAX_BYTES) {
     throw createError({ statusCode: 413, statusMessage: 'The picture upload is too large. Please choose a smaller picture.' })
   }
   let json: unknown

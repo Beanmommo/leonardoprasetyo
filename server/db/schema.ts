@@ -221,10 +221,12 @@ export const questionUsage = sqliteTable('question_usage', {
 
 export const leonardoActivities = sqliteTable('leonardo_activities', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  type: text('type', { enum: ['activity', 'milestone'] }).notNull().default('activity'),
   date: integer('date', { mode: 'timestamp' }).notNull(),
   order: integer('order').notNull().default(0),
   title: text('title').notNull(),
   description: text('description').notNull(),
+  contentMarkdown: text('content_markdown'),
   imageKey: text('image_key'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())

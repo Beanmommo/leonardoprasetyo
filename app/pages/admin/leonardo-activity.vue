@@ -4,15 +4,18 @@ import { LazyActivityCropModal, LazyActivityPictureModal, LazyModalConfirm } fro
 import type {
   LeonardoActivitiesResponse,
   LeonardoActivity,
+  LeonardoActivityType,
   LeonardoActivityInput,
   LeonardoActivityOrderInput,
   LeonardoActivityResponse
 } from '#shared/types/activity'
 
 type ActivityDraft = {
+  type: LeonardoActivityType
   date: string
   title: string
   description: string
+  contentMarkdown: string
 }
 
 useSeoMeta({
@@ -74,6 +77,7 @@ const canSubmit = computed(() => (
   draft.title.trim().length > 0
   && draft.title.trim().length <= 120
   && draft.description.trim().length <= 2000
+  && draft.contentMarkdown.trim().length <= 100_000
   && Boolean(draft.date)
   && !Number.isNaN(new Date(draft.date).getTime())
 ))
@@ -91,9 +95,11 @@ function emptyDraft(): ActivityDraft {
   const now = new Date()
   const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
   return {
+    type: 'activity',
     date: localNow.toISOString().slice(0, 10),
     title: '',
-    description: ''
+    description: '',
+    contentMarkdown: ''
   }
 }
 
@@ -134,9 +140,11 @@ function editActivity(activity: LeonardoActivity) {
   removePicture.value = false
   editingId.value = activity.id
   Object.assign(draft, {
+    type: activity.type,
     date: activity.date,
     title: activity.title,
-    description: activity.description
+    description: activity.description,
+    contentMarkdown: activity.contentMarkdown ?? ''
   })
 }
 
@@ -177,6 +185,8 @@ async function saveActivity() {
   saving.value = true
 
   const input: LeonardoActivityInput = {
+    type: draft.type,
+    contentMarkdown: draft.contentMarkdown.trim() || null,
     date: draft.date,
     title: draft.title.trim(),
     description: draft.description.trim(),
@@ -201,7 +211,7 @@ async function saveActivity() {
         })
 
     mergeActivities([response.activity])
-    void refreshNuxtData('leonardo-activity')
+    void refreshNuxtData(['leonardo-activity', 'leonardo-activity-map'])
     toast.add({
       title: editingId.value ? 'Activity updated' : 'Activity published',
       description: response.activity.title,
@@ -235,7 +245,7 @@ async function removeActivity(activity: LeonardoActivity) {
     await $fetch(`/api/admin/leonardo-activity/${activity.id}`, { method: 'DELETE' })
     activities.value = activities.value.filter(entry => entry.id !== activity.id)
     if (editingId.value === activity.id) resetForm()
-    void refreshNuxtData('leonardo-activity')
+    void refreshNuxtData(['leonardo-activity', 'leonardo-activity-map'])
     toast.add({
       title: 'Activity removed',
       description: activity.title,
@@ -264,7 +274,7 @@ async function moveActivity(activity: LeonardoActivity, direction: LeonardoActiv
       body: { direction }
     })
     mergeActivities(response.activities)
-    void refreshNuxtData('leonardo-activity')
+    void refreshNuxtData(['leonardo-activity', 'leonardo-activity-map'])
     toast.add({ title: 'Activity order saved', color: 'success', icon: 'i-lucide-arrow-up-down' })
   } catch (error) {
     toast.add({
@@ -313,7 +323,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
           label="PRIVATE ADMIN"
         />
         <h1 class="mt-4 text-3xl font-bold tracking-tight text-highlighted sm:text-4xl">
-          Activities
+          Activities & milestones
         </h1>
         <p class="mt-3 max-w-2xl leading-7 text-toned">
           Manage timeline entries, then preview how they appear on the public page.
@@ -353,7 +363,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                 <div class="flex items-center justify-between gap-3">
                   <div>
                     <h2 class="font-semibold text-highlighted">
-                      {{ isEditing ? 'Edit activity' : 'Add activity' }}
+                      {{ isEditing ? 'Edit entry' : 'Add entry' }}
                     </h2>
                     <p class="mt-1 text-sm text-muted">
                       {{ isEditing ? 'Update this timeline entry.' : 'Publish a new timeline entry.' }}
@@ -373,6 +383,13 @@ const columns: TableColumn<LeonardoActivity>[] = [
 
               <form @submit.prevent="saveActivity">
                 <fieldset :disabled="busy || loading" class="space-y-5">
+                  <UFormField label="Entry type" name="type" required>
+                    <USelect
+                      v-model="draft.type"
+                      :items="[{ label: 'Activity', value: 'activity' }, { label: 'Milestone', value: 'milestone' }]"
+                      class="w-full"
+                    />
+                  </UFormField>
                   <UFormField label="Date" name="date" required>
                     <UInput v-model="draft.date" type="date" class="w-full" />
                   </UFormField>
@@ -392,7 +409,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                   </UFormField>
 
                   <UFormField
-                    label="Description"
+                    :label="draft.type === 'milestone' ? 'Timeline summary' : 'Description'"
                     name="description"
                     :hint="`${draft.description.length}/2000`"
                   >
@@ -404,6 +421,27 @@ const columns: TableColumn<LeonardoActivity>[] = [
                       autoresize
                       class="w-full"
                     />
+                  </UFormField>
+
+                  <UFormField
+                    v-if="draft.type === 'milestone'"
+                    label="Milestone story"
+                    name="contentMarkdown"
+                    description="Optional story for the detail page. Use the toolbar or Markdown shortcuts to add headings, lists, links, and pictures."
+                    :hint="`${draft.contentMarkdown.length}/100000`"
+                    :error="draft.contentMarkdown.length > 100_000 ? 'Keep the story under 100,000 characters.' : undefined"
+                  >
+                    <LazyActivityStoryEditor
+                      :key="editingId ?? 'new'"
+                      v-model="draft.contentMarkdown"
+                      :disabled="busy || loading"
+                    />
+                    <details v-if="draft.contentMarkdown" class="mt-3 rounded-lg border border-default p-3">
+                      <summary class="cursor-pointer text-sm font-medium">
+                        Preview story
+                      </summary>
+                      <ActivityMarkdown :content="draft.contentMarkdown" class="mt-4" />
+                    </details>
                   </UFormField>
 
                   <UFormField label="Timeline picture" description="Optional. Choose an uploaded picture or upload and crop a new one.">
@@ -439,7 +477,7 @@ const columns: TableColumn<LeonardoActivity>[] = [
                   <UButton
                     type="submit"
                     block
-                    :label="isEditing ? 'Save changes' : 'Publish activity'"
+                    :label="isEditing ? 'Save changes' : draft.type === 'milestone' ? 'Publish milestone' : 'Publish activity'"
                     :icon="isEditing ? 'i-lucide-save' : 'i-lucide-send'"
                     :disabled="!canSubmit"
                     :loading="saving"
@@ -514,6 +552,13 @@ const columns: TableColumn<LeonardoActivity>[] = [
                   </div>
                 </template>
                 <template #title-cell="{ row }">
+                  <UBadge
+                    v-if="row.original.type === 'milestone'"
+                    label="Milestone"
+                    size="sm"
+                    variant="soft"
+                    class="mb-1"
+                  />
                   <p class="max-w-xs whitespace-normal font-medium text-highlighted">
                     {{ row.original.title }}
                   </p>

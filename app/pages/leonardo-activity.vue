@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useIntersectionObserver } from '@vueuse/core'
-import type { LeonardoActivitiesPageResponse, LeonardoActivity } from '#shared/types/activity'
+import type { LeonardoActivitiesPageResponse, LeonardoActivity, LeonardoActivityMapResponse } from '#shared/types/activity'
 
 useSeoMeta({
   title: 'Leonardo\'s Recent Activity | Leonardo Prasetyo',
@@ -17,6 +17,12 @@ const {
 })
 
 const activities = ref<LeonardoActivity[]>([])
+const { data: mapData, refresh: refreshMap } = await useFetch<LeonardoActivityMapResponse>('/api/leonardo-activity/map', {
+  key: 'leonardo-activity-map',
+  lazy: true
+})
+const mapItems = computed(() => mapData.value?.activities ?? activities.value)
+const scrollArea = useTemplateRef('scrollArea')
 const nextCursor = ref<string | null>(null)
 const loadingMore = ref(false)
 const loadMoreError = ref(false)
@@ -47,7 +53,7 @@ onBeforeUnmount(cancelPageRequest)
 
 async function refresh() {
   cancelPageRequest()
-  await fetchFirstPage()
+  await Promise.all([fetchFirstPage(), refreshMap()])
   if (!error.value) feedTop.value?.scrollIntoView({ block: 'start' })
 }
 
@@ -81,11 +87,20 @@ async function loadMore() {
 
 useIntersectionObserver(loadMoreTrigger, ([entry]) => {
   nearBottom.value = entry?.isIntersecting ?? false
-}, { rootMargin: '300px' })
+}, { root: scrollArea, rootMargin: '300px' })
 
 // Chat citations can point beyond the first page. Continue normal, bounded
 // paging until that activity is available, then scroll to its existing anchor.
 const route = useRoute()
+const router = useRouter()
+function selectActivity(id: string) {
+  const target = document.getElementById(`activity-${id}`)
+  if (target) {
+    target.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+    target.focus({ preventScroll: true })
+  }
+  void router.replace({ hash: `#activity-${id}` })
+}
 const anchorId = computed(() => route.hash.startsWith('#activity-') ? route.hash.slice(1) : '')
 const anchorResolved = ref(false)
 watch(anchorId, () => {
@@ -98,6 +113,7 @@ watch([activities, anchorId], async () => {
   if (target) {
     anchorResolved.value = true
     target.scrollIntoView({ block: 'start' })
+    target.focus({ preventScroll: true })
   }
 }, { immediate: true })
 
@@ -108,7 +124,7 @@ watch([nearBottom, nextCursor, loadingMore, status, loadMoreError, orderChanged,
   // Check the updated layout before fetching again, so one scroll does not
   // eagerly drain all remaining pages. Short pages can still fill the viewport.
   const trigger = loadMoreTrigger.value?.getBoundingClientRect()
-  const needsMoreVisibleItems = nearBottom.value && trigger && trigger.top <= window.innerHeight + 300
+  const needsMoreVisibleItems = nearBottom.value && trigger && trigger.top <= (scrollArea.value?.getBoundingClientRect().bottom ?? window.innerHeight) + 300
   const needsAnchor = anchorId.value && !anchorResolved.value && !document.getElementById(anchorId.value)
   if (needsMoreVisibleItems || needsAnchor) {
     void loadMore()
@@ -127,48 +143,58 @@ watch([nearBottom, nextCursor, loadingMore, status, loadMoreError, orderChanged,
     </template>
 
     <template #body>
-      <div class="min-h-full overflow-y-auto px-4 pb-10 pt-20 sm:px-6 lg:px-10 lg:pt-24">
-        <div ref="feedTop" class="mx-auto max-w-3xl scroll-mt-24">
-          <ActivityFeed
-            :activities="activities"
-            :pending="status === 'pending'"
-            :error="Boolean(error)"
-            @refresh="refresh"
-          />
-          <div v-if="activities.length && status !== 'pending' && !error" class="mt-8">
-            <UAlert
-              v-if="orderChanged"
-              color="info"
-              variant="soft"
-              title="The activity timeline has changed"
-              description="Refresh to continue with the updated order."
-              :actions="[{ label: 'Refresh activities', onClick: refresh }]"
+      <div ref="scrollArea" class="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-20 sm:px-6 md:pr-24 lg:pl-10 lg:pr-28 lg:pt-24">
+        <div class="mx-auto max-w-3xl">
+          <div ref="feedTop" class="min-w-0 scroll-mt-24">
+            <ActivityFeed
+              :activities="activities"
+              :pending="status === 'pending'"
+              :error="Boolean(error)"
+              @refresh="refresh"
             />
-            <div
-              v-else
-              ref="loadMoreTrigger"
-              class="flex flex-col items-center gap-3 py-4"
-              aria-live="polite"
-            >
-              <p v-if="loadMoreError" role="alert" class="text-sm text-error">
-                More activities could not be loaded. Please try again.
-              </p>
-              <UButton
-                v-if="nextCursor"
-                color="neutral"
+            <div v-if="activities.length && status !== 'pending' && !error" class="mt-8">
+              <UAlert
+                v-if="orderChanged"
+                color="info"
                 variant="soft"
-                :loading="loadingMore"
-                @click="loadMore"
+                title="The activity timeline has changed"
+                description="Refresh to continue with the updated order."
+                :actions="[{ label: 'Refresh activities', onClick: refresh }]"
+              />
+              <div
+                v-else
+                ref="loadMoreTrigger"
+                class="flex flex-col items-center gap-3 py-4"
+                aria-live="polite"
               >
-                {{ loadMoreError ? 'Try again' : 'Load more activities' }}
-              </UButton>
-              <p v-else class="text-sm text-muted">
-                No more activities
-              </p>
+                <p v-if="loadMoreError" role="alert" class="text-sm text-error">
+                  More activities could not be loaded. Please try again.
+                </p>
+                <UButton
+                  v-if="nextCursor"
+                  color="neutral"
+                  variant="soft"
+                  :loading="loadingMore"
+                  @click="loadMore"
+                >
+                  {{ loadMoreError ? 'Try again' : 'Load more activities' }}
+                </UButton>
+                <p v-else class="text-sm text-muted">
+                  No more activities
+                </p>
+              </div>
             </div>
           </div>
         </div>
       </div>
+      <ActivityMinimap
+        v-if="activities.length && status !== 'pending' && !error"
+        :items="mapItems"
+        :loaded-ids="activities.map(item => item.id)"
+        :scroll-root="scrollArea"
+        class="fixed right-4 top-24 z-10 lg:right-6"
+        @select="selectActivity"
+      />
     </template>
   </UDashboardPanel>
 </template>

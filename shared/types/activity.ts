@@ -1,5 +1,8 @@
+export type LeonardoActivityType = 'activity' | 'milestone'
+
 export interface LeonardoActivity {
   id: string
+  type: LeonardoActivityType
   date: string
   order: number
   title: string
@@ -7,6 +10,13 @@ export interface LeonardoActivity {
   imageUrl: string | null
   createdAt: string
   updatedAt: string
+  contentMarkdown?: string | null
+}
+
+export type LeonardoActivityMapEntry = Pick<LeonardoActivity, 'id' | 'type' | 'title' | 'date'>
+
+export interface LeonardoActivityMapResponse {
+  activities: LeonardoActivityMapEntry[]
 }
 
 export interface LeonardoActivitiesResponse {
@@ -22,9 +32,11 @@ export interface LeonardoActivityResponse {
 }
 
 export interface LeonardoActivityInput {
+  type?: LeonardoActivityType
   date: string
   title: string
   description?: string
+  contentMarkdown?: string | null
   removeImage?: boolean
 }
 

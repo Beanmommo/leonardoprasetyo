@@ -1,5 +1,5 @@
 import { db, schema } from 'hub:db'
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm'
 import { activityPageQuerySchema, afterActivityCursor, decodeActivityCursor, encodeActivityCursor } from '../utils/activityPagination'
 
 export default defineEventHandler(async (event) => {
@@ -13,12 +13,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Invalid activity cursor' })
   }
   await ensureActivityDatesNormalized()
+  // Article bodies are fetched only on the detail page, keeping paging light.
+  const { contentMarkdown: _body, ...feedColumns } = getTableColumns(schema.leonardoActivities)
 
   // Read the revision and page from the same snapshot. A reorder/date change
   // invalidates old cursors before any items from the changed ordering are sent.
   const [[state], rows] = await db.batch([
     db.select().from(schema.activityFeedState).where(eq(schema.activityFeedState.id, 1)),
-    db.select().from(schema.leonardoActivities)
+    db.select(feedColumns).from(schema.leonardoActivities)
       .where(cursor
         ? and(
             afterActivityCursor(cursor),

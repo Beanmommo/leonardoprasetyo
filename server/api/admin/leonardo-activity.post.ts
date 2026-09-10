@@ -13,6 +13,8 @@ export default defineEventHandler(async (event) => {
   try {
     const [activity] = await db.insert(schema.leonardoActivities).values({
       id,
+      type: input.type ?? 'activity',
+      contentMarkdown: input.contentMarkdown || null,
       imageKey,
       date: new Date(input.date),
       order: firstActivityOrder(input.date),

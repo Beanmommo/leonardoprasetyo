@@ -8,18 +8,22 @@ export async function ensureActivityDatesNormalized() {
 }
 
 export const leonardoActivityInputSchema = z.object({
+  type: z.enum(['activity', 'milestone']).optional(),
   date: z.iso.date(),
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).optional().default(''),
+  contentMarkdown: z.string().trim().max(100_000).nullable().optional(),
   removeImage: z.boolean().optional().default(false)
 })
 
 export function serializeLeonardoActivity(activity: {
   id: string
+  type: 'activity' | 'milestone'
   date: Date
   order: number
   title: string
   description: string
+  contentMarkdown?: string | null
   imageKey: string | null
   createdAt: Date
   updatedAt: Date

@@ -55,6 +55,33 @@ test('all migrations apply; concurrent prepends and deletion never renumber exis
   assert.equal(await revision(), 0)
 })
 
+test('milestones share cursor ordering with activities and content edits preserve their position', async (t) => {
+  const { database, insert, list, page, cursorFor, revision } = await fixture(t)
+  const legacy = await insert('2026-09-07', 'Existing activity')
+  assert.equal(legacy.type, 'activity')
+  assert.equal(legacy.contentMarkdown, null)
+  const [milestone] = await database.insert(activities).values({
+    date: legacy.date,
+    order: firstActivityOrder('2026-09-07'),
+    type: 'milestone',
+    title: 'A milestone',
+    description: 'Short summary',
+    contentMarkdown: '## A longer story\n\n![Picture](https://example.com/picture.jpg)'
+  }).returning()
+  assert.deepEqual((await list()).map(entry => entry.id), [milestone.id, legacy.id])
+  const cursor = await cursorFor(milestone)
+  assert.deepEqual((await page(20, cursor)).map(entry => entry.id), [legacy.id])
+  await database.update(activities).set({
+    contentMarkdown: '# Updated story', type: 'activity'
+  }).where(eq(activities.id, milestone.id))
+  const changed = (await list())[0]
+  assert.equal(changed.order, milestone.order)
+  assert.equal(changed.contentMarkdown, '# Updated story')
+  assert.equal(await revision(), 0)
+  await database.all(moveActivityWithinDay(milestone.id, 'down'))
+  assert.deepEqual((await list()).map(entry => entry.id), [legacy.id, milestone.id])
+})
+
 test('arrows swap exactly two entries in the same day and stop at day boundaries', async (t) => {
   const { database, insert, list, revision } = await fixture(t)
   const older = await insert('2026-09-06')

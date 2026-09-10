@@ -23,6 +23,8 @@ export default defineEventHandler(async (event) => {
       db.select({ imageKey: schema.leonardoActivities.imageKey })
         .from(schema.leonardoActivities).where(eq(schema.leonardoActivities.id, id)),
       db.update(schema.leonardoActivities).set({
+        type: input.type,
+        contentMarkdown: input.contentMarkdown === undefined ? undefined : input.contentMarkdown || null,
         date: new Date(input.date),
         order: changedActivityDateOrder(input.date),
         title: input.title,

@@ -214,10 +214,28 @@ Trace completion is awaited at the end of streaming and registered with the Work
 | `indexing_tasks` | Workflow instance, processing stage, progress, extraction result, attempts, and errors |
 | `resume_ingestion_leases` | Singleton renewable lease protecting publication and deletion |
 | `question_usage` | HMAC-derived IP identifier and daily UTC question count |
-| `leonardo_activities` | Calendar dates, titles, descriptions, order within each day, and optional image reference |
+| `leonardo_activities` | Activities and milestones: type, calendar date, title, summary, optional Markdown body, order within each day, and optional image reference |
 | `activity_feed_state` | Cursor revision and completion marker for legacy date normalization |
 
 `uploads` has a partial unique index allowing only one non-deleted `resume` row. There is no single-active-document constraint: multiple `document` rows and the resume can be active RAG sources simultaneously. `document_chunks` is unique by Vectorize ID and by upload/generation/chunk index.
+
+Activities and milestones share one table because they use the same calendar ordering,
+image storage, administration, and feed pagination. `type` defaults to `activity` for
+existing rows; `milestone` selects the larger timeline presentation and links to
+`/activity/:id`. `description` remains the plain-text timeline summary (2,000 characters),
+while nullable `content_markdown` stores the optional detail-page story (100,000 characters).
+The admin story field uses Nuxt UI's Tiptap editor in Markdown mode, with a formatting
+toolbar, Markdown shortcuts, URL images, undo/redo, and the existing detail-page preview.
+The table extension preserves Markdown tables when editing existing stories. The editor
+is client-only, becomes read-only while the form is busy, and resets its undo history
+when switching entries. Stories continue to save as Markdown with a 100,000-character limit.
+Rendering uses Comark's security plugin with an allowlist of article elements.
+
+The tablet/desktop minimap uses a compact index of all entries, including those beyond
+the loaded feed page. Milestones have longer, thicker marks. An intersection observer
+tracks the dashboard scroll panel: visible entries use 100% opacity and other entries
+use 40%. The minimap follows the visible range; selecting an unloaded entry pages to its
+anchor. It is hidden below 768px and respects reduced-motion preferences.
 
 ### Retained legacy tables
 
@@ -231,6 +249,8 @@ Trace completion is awaited at the end of streaming and registered with the Work
 | --- | --- |
 | `POST /api/chat` | Validate, rate-limit, retrieve Library context, optionally call the activity tool, trace, and stream a grounded answer |
 | `GET /api/leonardo-activity` | Return `{ activities, nextCursor }`; optional `limit` (default 20, maximum 50) and opaque `cursor` |
+| `GET /api/leonardo-activity/map` | Return the ordered minimap index: ID, type, title, and date only |
+| `GET /api/leonardo-activity/:id` | Return a milestone including its Markdown body; ordinary activities and missing IDs return 404 |
 | `GET /api/library/files` | List public active documents; `role=all` also includes the resume |
 | `GET /api/library/files/:id` | Return public document metadata |
 | `GET /api/library/files/:id/content` | Stream the public PDF with range support |
