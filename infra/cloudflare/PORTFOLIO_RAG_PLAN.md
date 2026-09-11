@@ -1,5 +1,7 @@
 # Public Portfolio Chat and Resume RAG Plan
 
+> Model update (11 September 2026): the current implementation uses `@cf/zai-org/glm-5.3-flash` with low reasoning effort and a 4,096-token generation budget per step. Granite references below record the original implementation plan; see [README.md](./README.md) for the current configuration.
+
 ## Status
 
 - Implemented in the application as of 2026-08-29. Cloudflare resources and

@@ -28,7 +28,8 @@ const MAX_BODY_BYTES = 64 * 1024
 const MAX_RECENT_MESSAGES = 8
 const MAX_QUESTION_CHARACTERS = 1_000
 const MAX_CONVERSATION_CHARACTERS = 20_000
-const MAX_OUTPUT_TOKENS = 800
+// Leave room for reasoning and the final answer within each bounded model step.
+const MAX_OUTPUT_TOKENS = 4_096
 
 const textPartSchema = z.object({
   type: z.literal('text'),
@@ -370,6 +371,7 @@ export default defineEventHandler(async (event) => {
         const result = streamText({
           abortSignal: requestSignal,
           model: workersAi(runtime.chatModel, {
+            reasoning_effort: 'low',
             extraHeaders: { 'cf-aig-collect-log-payload': 'false' }
           }),
           instructions: buildInstructions(retrieval.context),

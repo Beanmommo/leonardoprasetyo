@@ -8,7 +8,7 @@ export const CLOUDFLARE_SECRET_NAMES = [
   'LIBRARY_ADMIN_TOKEN',
   'LANGSMITH_API_KEY'
 ] as const
-export const CLOUDFLARE_CHAT_MODEL = '@cf/ibm-granite/granite-4.0-h-micro' as const
+export const CLOUDFLARE_CHAT_MODEL = '@cf/zai-org/glm-5.3-flash' as const
 export const CLOUDFLARE_EMBEDDING_MODEL = '@cf/qwen/qwen3-embedding-0.6b' as const
 export const CLOUDFLARE_EMBEDDING_PROVIDER = 'workers-ai' as const
 export const CLOUDFLARE_EMBEDDING_DIMENSIONS = 1024 as const

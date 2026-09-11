@@ -1,16 +1,72 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
-  <title id="title">Leonardo logo mark in primary orange</title>
-  <desc id="desc">A geometric letter L with a coffee cup cut out of its lower stroke.</desc>
-  <defs>
-    <mask id="cup-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="160" height="160">
-      <rect width="160" height="160" fill="#fff" />
-      <path fill="#000" d="M76 106h43v13c0 13-8.6 21-21.5 21S76 132 76 119v-13Z" />
-      <path fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="7" d="M119 112h8.5c5.8 0 9.5 3.8 9.5 9s-3.7 9-9.5 9H119" />
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 160 160"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg3"
+   sodipodi:docname="leonardo-mark-primary.svg"
+   inkscape:export-filename="leonardo-mark-primary.png"
+   inkscape:export-xdpi="192"
+   inkscape:export-ydpi="192"
+   inkscape:version="1.4 (e7c3feb1, 2024-10-09)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview3"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.1625"
+     inkscape:cx="80"
+     inkscape:cy="80"
+     inkscape:window-width="1104"
+     inkscape:window-height="785"
+     inkscape:window-x="0"
+     inkscape:window-y="30"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg3" />
+  <title
+     id="title">Leonardo logo mark in primary orange</title>
+  <desc
+     id="desc">A geometric letter L with a coffee cup cut out of its lower stroke.</desc>
+  <defs
+     id="defs2">
+    <mask
+       id="cup-cutout"
+       maskUnits="userSpaceOnUse"
+       x="0"
+       y="0"
+       width="160"
+       height="160">
+      <rect
+         width="160"
+         height="160"
+         fill="#fff"
+         id="rect1" />
+      <path
+         fill="#000"
+         d="M76 106h43v13c0 13-8.6 21-21.5 21S76 132 76 119v-13Z"
+         id="path1" />
+      <path
+         fill="none"
+         stroke="#000"
+         stroke-linecap="round"
+         stroke-linejoin="round"
+         stroke-width="7"
+         d="M119 112h8.5c5.8 0 9.5 3.8 9.5 9s-3.7 9-9.5 9H119"
+         id="path2" />
     </mask>
   </defs>
   <path
-    fill="#fca40b"
-    mask="url(#cup-cutout)"
-    d="M26 12h32c3.3 0 6 2.7 6 6v74c0 3.3 2.7 6 6 6h68c3.3 0 6 2.7 6 6v36c0 3.3-2.7 6-6 6H26c-3.3 0-6-2.7-6-6V18c0-3.3 2.7-6 6-6Z"
-  />
+     fill="#fca40b"
+     mask="url(#cup-cutout)"
+     d="M26 12h32c3.3 0 6 2.7 6 6v74c0 3.3 2.7 6 6 6h68c3.3 0 6 2.7 6 6v36c0 3.3-2.7 6-6 6H26c-3.3 0-6-2.7-6-6V18c0-3.3 2.7-6 6-6Z"
+     id="path3" />
 </svg>

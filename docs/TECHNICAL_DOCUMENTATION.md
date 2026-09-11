@@ -1,6 +1,6 @@
 # Leonardo Prasetyo Portfolio and RAG Platform
 
-Technical documentation for the `leonardoprasetyo` repository. This document describes the current working tree as of 7 September 2026.
+Technical documentation for the `leonardoprasetyo` repository. This document describes the current working tree as of 11 September 2026.
 
 ## 1. System purpose
 
@@ -13,7 +13,7 @@ The application keeps public chat history in the visitor's browser. Application 
 - **Application:** Nuxt 4, Vue 3, TypeScript, Nuxt UI, Tailwind CSS
 - **AI orchestration:** Vercel AI SDK and `workers-ai-provider`, with a structured LangChain activity tool from `@langchain/core`
 - **AI observability:** LangSmith request traces for Library retrieval, model steps, tool calls, and answers
-- **Generation model:** Cloudflare Workers AI `@cf/ibm-granite/granite-4.0-h-micro`
+- **Generation model:** Cloudflare Workers AI `@cf/zai-org/glm-5.3-flash`
 - **Embedding model:** Cloudflare Workers AI `@cf/qwen/qwen3-embedding-0.6b` (1,024 dimensions)
 - **Retrieval:** Cloudflare Vectorize with cosine similarity
 - **Database:** Cloudflare D1 (SQLite) through NuxtHub and Drizzle ORM
@@ -159,10 +159,10 @@ For each question, the server:
 4. queries Vectorize for up to 20 candidates across all published sources;
 5. reloads authoritative current-generation chunk text from D1, rejects stale matches, preserves Vectorize ranking, and keeps the top five;
 6. builds source citations and a bounded context block;
-7. lets Granite invoke the activity tool when the question needs timeline information;
+7. lets GLM-5.3 Flash invoke the activity tool when the question needs timeline information;
 8. streams the answer and updated Library/activity citation metadata to the browser, then finalizes the LangSmith trace.
 
-Each retrieved chunk contributes at most 3,500 characters to the model context and a 280-character citation excerpt to the client. Each model step is capped at 800 output tokens. A request permits at most three model steps, with tools disabled for the third step so the model can complete its answer.
+Each retrieved chunk contributes at most 3,500 characters to the model context and a 280-character citation excerpt to the client. Each model step uses low reasoning effort and is capped at 4,096 generated tokens to allow room for reasoning and a concise final answer. Reasoning is not sent to the browser. GLM-5.3 Flash requires Workers Paid or prepaid AI Gateway credits. A request permits at most three model steps, with tools disabled for the third step so the model can complete its answer.
 
 The system prompt restricts answers to Leonardo's published professional information. Retrieved PDF text is encoded as JSON and markup delimiters are neutralised so indexed content remains an untrusted data boundary rather than executable instructions.
 
@@ -180,7 +180,7 @@ The tool receives the current request's `DB` binding. Neither the browser nor mo
 
 Results include only public activity IDs, dates, bounded titles/descriptions, and timeline links. They are ordered by date descending, then editorial order and ID. Date filters and displayed dates use `Australia/Melbourne`, including daylight-saving transitions, through `shared/utils/activityDate.ts`. An extra row detects truncation and sets `hasMore` without claiming the response lists every match.
 
-Each request permits at most two activity lookups. Cancellation is checked before and after the query. Citation labels remain stable across both lookups, and the browser uses the latest citation update. The model is instructed to treat activity content as reference data, distinguish failed lookups from empty results, and avoid inventing missing entries. Granite's occasional double-encoded JSON arguments are repaired only when the decoded object passes the complete tool schema.
+Each request permits at most two activity lookups. Cancellation is checked before and after the query. Citation labels remain stable across both lookups, and the browser uses the latest citation update. The model is instructed to treat activity content as reference data, distinguish failed lookups from empty results, and avoid inventing missing entries. Double-encoded JSON arguments are repaired only when the decoded object passes the complete tool schema.
 
 ### 6.2 LangSmith tracing and workflow inspection
 

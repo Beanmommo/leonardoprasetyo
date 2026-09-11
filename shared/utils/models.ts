@@ -1,3 +1,3 @@
 export const MODELS = [
-  { label: 'Granite 4.0 H Micro', value: '@cf/ibm-granite/granite-4.0-h-micro', icon: 'i-simple-icons-cloudflare' }
+  { label: 'GLM-5.3 Flash', value: '@cf/zai-org/glm-5.3-flash', icon: 'i-simple-icons-cloudflare' }
 ]

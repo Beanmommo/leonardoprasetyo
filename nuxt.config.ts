@@ -158,7 +158,7 @@ export default defineNuxtConfig({
           LANGSMITH_PROJECT: usesCloudflareDevResources ? 'leonardo-chat-dev' : 'leonardo-chat-prod',
           LANGSMITH_ENDPOINT: 'https://api.smith.langchain.com',
           AI_GATEWAY_ID: 'leonardoprasetyo',
-          CHAT_MODEL: '@cf/ibm-granite/granite-4.0-h-micro',
+          CHAT_MODEL: '@cf/zai-org/glm-5.3-flash',
           EMBEDDING_PROVIDER: 'workers-ai',
           EMBEDDING_MODEL: '@cf/qwen/qwen3-embedding-0.6b',
           EMBEDDING_DIMENSIONS: '1024',

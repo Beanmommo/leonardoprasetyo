@@ -8,7 +8,7 @@ This directory is the deployment contract and runbook for the implemented Nuxt p
 | --- | --- | --- |
 | Nuxt application and API | Workers | Serve the application and keep AI credentials off the browser. |
 | Durable document indexing | Workflows | Run the multi-stage indexing task after the R2 upload request completes, with retries and a concurrency limit of one. |
-| Model inference | Workers AI through AI Gateway | Stream Granite chat completions, create Qwen embeddings, retain operational metadata without prompt/response payloads, and enforce gateway policy. |
+| Model inference | Workers AI through AI Gateway | Stream GLM-5.3 Flash chat completions, create Qwen embeddings, retain operational metadata without prompt/response payloads, and enforce gateway policy. |
 | Vector search | Vectorize | Store and query document-chunk embeddings. |
 | Uploaded file bytes | R2 | Store the original objects. D1 is not intended for file bytes. |
 | Relational metadata | D1 | Store upload ownership, R2 object keys, processing state, and the mapping from chunks to Vectorize IDs. |
@@ -19,7 +19,7 @@ The application request flow is:
 1. The browser loads chat history from `localStorage` after the Vue app mounts.
 2. The browser sends the current conversation to a same-origin Nuxt API route such as `POST /api/chat`.
 3. The Worker optionally embeds the latest question, queries Vectorize, and loads matching chunk text from D1.
-4. The Worker runs Granite through the Workers AI binding and AI Gateway, then streams the answer to the browser.
+4. The Worker runs GLM-5.3 Flash through the Workers AI binding and AI Gateway, then streams the answer to the browser.
 5. The browser appends the completed response to `localStorage`.
 6. An upload is streamed through an authenticated API route into R2. D1 stores its metadata and a persistent task record, then a Workflow extracts text, chunks it, creates embeddings, and upserts them into Vectorize.
 
@@ -43,7 +43,7 @@ implementation to `leonardoprasetyo` and
 
 The embedding model is Cloudflare-hosted `@cf/qwen/qwen3-embedding-0.6b`. It returns 1,024-dimensional vectors, so the Vectorize index must use 1,024 dimensions and cosine distance. Changing embedding models or dimensions later requires creating a new index and re-embedding the corpus.
 
-The selected low-cost chat model is Cloudflare-hosted `@cf/ibm-granite/granite-4.0-h-micro`, routed through AI Gateway by the Workers AI binding. Keep the model name server-controlled so it cannot be changed from browser requests.
+The selected reasoning chat model is Cloudflare-hosted `@cf/zai-org/glm-5.3-flash`, routed through AI Gateway by the Workers AI binding. Keep the model name server-controlled so it cannot be changed from browser requests. GLM-5.3 Flash requires Workers Paid or prepaid AI Gateway credits. Chat uses low reasoning effort with a 4,096-token generation budget per model step; the browser receives only the final answer text, tool events, and citations.
 
 See [wrangler.bindings.jsonc](./wrangler.bindings.jsonc) for the binding fragment and [ai-gateway.json](./ai-gateway.json) for the initial gateway settings.
 
@@ -264,7 +264,7 @@ The phases below record the design path and useful post-launch enhancements. The
 ### Phase 3: Route Workers AI models through AI Gateway
 
 - Replace direct provider selection in `server/api/chats/[id].post.ts` with a same-origin `POST /api/chat` route.
-- Use the `AI` binding with the `leonardoprasetyo` gateway for both Granite generation and Qwen embeddings; disable response caching for personalized requests.
+- Use the `AI` binding with the `leonardoprasetyo` gateway for both GLM-5.3 Flash generation and Qwen embeddings; disable response caching for personalized requests.
 - Pass only an allow-listed model identifier from the browser; do not accept arbitrary provider URLs or credentials.
 - Preserve response streaming, abort handling, input validation, CSRF protection, and bounded message/context sizes.
 - Attach non-sensitive metadata such as release or route name to Gateway logs. Never attach raw session tokens.
@@ -406,7 +406,7 @@ environment isolation, citation stability, and cancellation tests. Use
 - [R2 Worker binding](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/)
 - [D1 Wrangler commands](https://developers.cloudflare.com/d1/wrangler-commands/)
 - [Workers AI with the Vercel AI SDK](https://developers.cloudflare.com/workers-ai/configuration/ai-sdk/)
-- [Granite 4.0 H Micro](https://developers.cloudflare.com/workers-ai/models/granite-4.0-h-micro/)
+- [GLM-5.3 Flash](https://developers.cloudflare.com/workers-ai/models/glm-5.3-flash/)
 - [Qwen3 Embedding 0.6B](https://developers.cloudflare.com/workers-ai/models/qwen3-embedding-0.6b/)
 - [Vectorize limits](https://developers.cloudflare.com/vectorize/platform/limits/)
 - [MDN localStorage](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage)

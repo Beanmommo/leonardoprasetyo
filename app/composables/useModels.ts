@@ -1,7 +1,13 @@
 import { MODELS } from '#shared/utils/models'
 
 export function useModels() {
-  const model = useCookie<string>('model', { default: () => '@cf/ibm-granite/granite-4.0-h-micro' })
+  const defaultModel = MODELS[0]!.value
+  const model = useCookie<string>('model', { default: () => defaultModel })
+
+  // Refresh saved selections when the server-controlled model changes.
+  if (!MODELS.some(item => item.value === model.value)) {
+    model.value = defaultModel
+  }
 
   return {
     models: MODELS,
