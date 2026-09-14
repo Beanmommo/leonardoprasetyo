@@ -378,7 +378,7 @@ function vote(message: UIMessage, isUpvoted: boolean) {
     v-if="pageReady && localChat"
     id="chat"
     class="relative min-h-0"
-    :ui="{ body: 'p-0 sm:p-0 overscroll-none' }"
+    :ui="{ body: 'p-0 sm:p-0 overflow-x-hidden overscroll-none' }"
   >
     <template #header>
       <Navbar>
@@ -396,7 +396,7 @@ function vote(message: UIMessage, isUpvoted: boolean) {
     </template>
 
     <template #body>
-      <UContainer class="flex-1 flex flex-col gap-4 pb-4 sm:gap-6 sm:pb-6">
+      <UContainer class="min-w-0 flex-1 flex flex-col gap-4 pb-4 sm:gap-6 sm:pb-6">
         <UAlert
           v-if="storageError"
           color="warning"
@@ -441,7 +441,8 @@ function vote(message: UIMessage, isUpvoted: boolean) {
                 color="neutral"
                 variant="outline"
                 size="xs"
-                class="rounded-full"
+                class="max-w-full rounded-full"
+                :ui="{ label: 'min-w-0 whitespace-normal wrap-anywhere' }"
               />
             </div>
           </template>

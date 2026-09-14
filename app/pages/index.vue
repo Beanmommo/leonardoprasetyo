@@ -61,7 +61,7 @@ const quickChats = [
   <UDashboardPanel
     id="home"
     class="min-h-0"
-    :ui="{ body: 'p-0 sm:p-0' }"
+    :ui="{ body: 'p-0 sm:p-0 overflow-x-hidden' }"
   >
     <template #header>
       <Navbar />
@@ -69,7 +69,7 @@ const quickChats = [
 
     <template #body>
       <div class="flex flex-1">
-        <UContainer class="flex-1 flex flex-col justify-center gap-4 sm:gap-6 py-8">
+        <UContainer class="min-w-0 flex-1 flex flex-col justify-center gap-4 sm:gap-6 py-8">
           <div>
             <h1 class="text-3xl sm:text-4xl text-highlighted font-bold">
               {{ greeting }}
@@ -118,7 +118,8 @@ const quickChats = [
               size="sm"
               color="neutral"
               variant="outline"
-              class="rounded-full"
+              class="max-w-full rounded-full"
+              :ui="{ label: 'min-w-0 whitespace-normal wrap-anywhere' }"
               :disabled="loading"
               @click="createChat(quickChat.label)"
             >
