@@ -165,9 +165,14 @@ The build uses compatibility date `2026-08-29` with `nodejs_compat`. `pdf-parse`
 
 Indexing sends ten chunks per embedding request and reads at most 20 vector IDs
 per `getByIds` call (including deletion verification). Vector visibility is
-polled every five seconds for up to two minutes. The Worker explicitly sets
-`limits.subrequests` to 10,000 for indexing, progress/lease writes, polling,
-and Workflow retries. A `VECTOR_GET_ERROR` reporting too many IDs is a read
+polled every five seconds for up to two minutes. The production account uses
+Workers Free, so the Wrangler configuration omits custom `limits` and uses the
+plan defaults. Setting `limits.subrequests` to 10,000 causes deployment to fail
+with Cloudflare error 100328 (reported as unsupported CPU limits). Local testing
+and Wrangler dry runs do not validate the account's entitlement to these limits.
+Larger indexing jobs and retries remain subject to the Free plan's subrequest
+and CPU limits; batching reduces usage without increasing those quotas.
+A `VECTOR_GET_ERROR` reporting too many IDs is a read
 batching error; subsequent retries can hide it behind a subrequest-limit error.
 Inspect all attempts with `wrangler workflows instances describe` when diagnosing
 a failed task. Run `pnpm test:library-indexing` for the batching regressions.

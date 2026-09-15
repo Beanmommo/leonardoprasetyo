@@ -4,9 +4,7 @@
   // .output/server/wrangler.json with these same values.
   "compatibility_date": "2026-08-29",
   "compatibility_flags": ["nodejs_compat"],
-  "limits": {
-    "subrequests": 10000
-  },
+  // Workers Free: omit custom limits so deployment uses the plan defaults.
   "ai": {
     "binding": "AI"
   },
