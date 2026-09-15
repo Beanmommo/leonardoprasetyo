@@ -163,6 +163,15 @@ The Cloudflare-hosted model calls require no OpenAI, Google, or other provider A
 
 The build uses compatibility date `2026-08-29` with `nodejs_compat`. `pdf-parse` is loaded lazily inside the ingestion request with JavaScript evaluation and worker fetches disabled; if it cannot parse in the Worker runtime, ingestion falls back to Cloudflare Workers AI `AI.toMarkdown()` and continues through the same splitter, Qwen embedding, D1, and Vectorize stages. The generated Worker is suitable for Workers Paid; production ingestion should not rely on the Free plan's small CPU allowance.
 
+Indexing sends ten chunks per embedding request and reads at most 20 vector IDs
+per `getByIds` call (including deletion verification). Vector visibility is
+polled every five seconds for up to two minutes. The Worker explicitly sets
+`limits.subrequests` to 10,000 for indexing, progress/lease writes, polling,
+and Workflow retries. A `VECTOR_GET_ERROR` reporting too many IDs is a read
+batching error; subsequent retries can hide it behind a subrequest-limit error.
+Inspect all attempts with `wrangler workflows instances describe` when diagnosing
+a failed task. Run `pnpm test:library-indexing` for the batching regressions.
+
 ## Publish and ingest Library sources
 
 The R2 bucket stays private. A signed-in, allowlisted GitHub administrator can

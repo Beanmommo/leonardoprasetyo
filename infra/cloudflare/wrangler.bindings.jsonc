@@ -4,6 +4,9 @@
   // .output/server/wrangler.json with these same values.
   "compatibility_date": "2026-08-29",
   "compatibility_flags": ["nodejs_compat"],
+  "limits": {
+    "subrequests": 10000
+  },
   "ai": {
     "binding": "AI"
   },

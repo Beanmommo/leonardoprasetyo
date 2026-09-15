@@ -121,6 +121,13 @@ export default defineNuxtConfig({
         name: cloudflareWorkerName,
         compatibility_date: '2026-08-29',
         compatibility_flags: ['nodejs_compat'],
+        // Indexing includes batched embeddings, D1 progress/lease writes,
+        // Vectorize visibility polls, and Workflow retries (Workers Paid).
+        limits: {
+          // @ts-expect-error Nitro's vendored Wrangler type predates
+          // limits.subrequests; the installed Wrangler schema supports it.
+          subrequests: 10_000
+        },
         ai: {
           binding: 'AI',
           ...remoteCloudflareBinding

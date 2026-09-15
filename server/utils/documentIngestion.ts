@@ -1,6 +1,7 @@
 import { db, schema } from 'hub:db'
 import { and, count, eq, exists, gt, lte, ne } from 'drizzle-orm'
-import { createWorkersAiEmbedding } from './workersAiEmbedding'
+import { createWorkersAiEmbeddings } from './workersAiEmbedding'
+import { getVectorsByIds } from './vectorizeRead'
 import { getCloudflareConfig, requireCloudflareBinding } from './cloudflareBindings'
 import type { CloudflareBindingSource } from './cloudflareBindings'
 import type { IndexingTaskProgress } from './indexingTasks'
@@ -13,12 +14,14 @@ const VECTOR_BATCH_SIZE = 100
 // D1 accepts at most 100 bound parameters per statement. Each staged chunk
 // inserts 15 columns, so six rows (90 parameters) is the largest safe batch.
 const DB_BATCH_SIZE = 6
-const EMBEDDING_CONCURRENCY = 3
+const EMBEDDING_BATCH_SIZE = 10
 // Vectorize mutations are asynchronous. A busy remote development index can
 // take longer than the typical few seconds to expose an accepted upsert, so do
 // not roll back a valid generation after only 30 seconds.
 const VECTOR_VISIBILITY_TIMEOUT_MS = 2 * 60 * 1000
-const VECTOR_VISIBILITY_POLL_MS = 1_000
+// Each poll reads every pending batch and updates D1. Avoid consuming the
+// invocation's subrequest budget while waiting for asynchronous mutations.
+const VECTOR_VISIBILITY_POLL_MS = 5_000
 // Keep the persisted lease key compatible with the existing D1 constraint.
 // The lease protects publication of any Library document, not only resumes.
 const DOCUMENT_INGESTION_LEASE_NAME = 'resume-publication'
@@ -289,24 +292,6 @@ async function prepareChunks(
   return chunks
 }
 
-async function mapWithConcurrency<Item, Result>(
-  items: Item[],
-  concurrency: number,
-  mapper: (item: Item, index: number) => Promise<Result>
-): Promise<Result[]> {
-  const results = new Array<Result>(items.length)
-  let nextIndex = 0
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex
-      nextIndex += 1
-      results[index] = await mapper(items[index]!, index)
-    }
-  })
-  await Promise.all(workers)
-  return results
-}
-
 function inBatches<Item>(items: Item[], size: number): Item[][] {
   const batches: Item[][] = []
   for (let offset = 0; offset < items.length; offset += size) {
@@ -336,11 +321,8 @@ async function waitForVectorDeletion(
 
   while (pending.length > 0) {
     await renewLease()
-    const stillVisible: string[] = []
-    for (const batch of inBatches(pending, 100)) {
-      const visible = await vectorize.getByIds(batch)
-      stillVisible.push(...visible.map(vector => vector.id))
-    }
+    const visible = await getVectorsByIds(vectorize, pending)
+    const stillVisible = visible.map(vector => vector.id)
     if (stillVisible.length === 0) {
       return
     }
@@ -369,19 +351,17 @@ async function waitForVectors(
 
   while (pending.size > 0) {
     await renewLease()
-    for (const batch of inBatches(Array.from(pending.keys()), 100)) {
-      const visible = await vectorize.getByIds(batch)
-      for (const vector of visible) {
-        const expectedContentHash = pending.get(vector.id)
-        const metadata = vector.metadata as Record<string, unknown> | undefined
-        if (expectedContentHash
-          && vector.namespace === ingestionId
-          && metadata?.upload_id === uploadId
-          && metadata?.ingestion_id === ingestionId
-          && metadata?.content_hash === expectedContentHash
-          && metadata?.embedding_model === embeddingModel) {
-          pending.delete(vector.id)
-        }
+    const visible = await getVectorsByIds(vectorize, Array.from(pending.keys()))
+    for (const vector of visible) {
+      const expectedContentHash = pending.get(vector.id)
+      const metadata = vector.metadata as Record<string, unknown> | undefined
+      if (expectedContentHash
+        && vector.namespace === ingestionId
+        && metadata?.upload_id === uploadId
+        && metadata?.ingestion_id === ingestionId
+        && metadata?.content_hash === expectedContentHash
+        && metadata?.embedding_model === embeddingModel) {
+        pending.delete(vector.id)
       }
     }
 
@@ -619,24 +599,23 @@ export async function ingestDocument(
       chunkCount: chunks.length
     })
 
-    let embeddedChunkCount = 0
-    const embeddings = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
+    const embeddings: number[][] = []
+    for (const batch of inBatches(chunks, EMBEDDING_BATCH_SIZE)) {
       await renewDocumentIngestionLease(lease)
-      const embedding = await createWorkersAiEmbedding(
+      const batchEmbeddings = await createWorkersAiEmbeddings(
         source,
-        chunk.textContent,
+        batch.map(chunk => chunk.textContent),
         { kind: 'document', title: upload.originalName }
       )
-      embeddedChunkCount += 1
+      embeddings.push(...batchEmbeddings)
       await options.onProgress?.({
         stage: 'generating_embeddings',
-        current: embeddedChunkCount,
+        current: embeddings.length,
         total: chunks.length,
         pageCount: pages.length,
         chunkCount: chunks.length
       })
-      return embedding
-    })
+    }
 
     // Stage the current generation in D1 before writing Vectorize. If the
     // isolate stops during an upsert, a takeover can discover and remove every

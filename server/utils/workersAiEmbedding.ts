@@ -2,8 +2,8 @@ import {
   CLOUDFLARE_EMBEDDING_MODEL,
   getCloudflareConfig,
   requireCloudflareBinding
-} from './cloudflareBindings'
-import type { CloudflareBindingSource } from './cloudflareBindings'
+} from './cloudflareBindings.ts'
+import type { CloudflareBindingSource } from './cloudflareBindings.ts'
 
 type WorkersAiEmbeddingOptions = {
   kind: 'query' | 'document'
@@ -13,21 +13,23 @@ type WorkersAiEmbeddingOptions = {
 
 const RETRIEVAL_INSTRUCTION = 'Given a question, retrieve relevant passages from the indexed document library that answer the question.'
 
-function readEmbeddingValues(payload: { data?: number[][] }): number[] | undefined {
-  const values = payload.data?.[0]
-  if (!Array.isArray(values) || values.some(value => typeof value !== 'number' || !Number.isFinite(value))) {
-    return undefined
-  }
-  return values
-}
-
 export async function createWorkersAiEmbedding(
   source: CloudflareBindingSource,
   text: string,
   options: WorkersAiEmbeddingOptions
 ): Promise<number[]> {
-  const normalizedText = text.trim()
-  if (!normalizedText) {
+  const embeddings = await createWorkersAiEmbeddings(source, [text], options)
+  return embeddings[0]!
+}
+
+export async function createWorkersAiEmbeddings(
+  source: CloudflareBindingSource,
+  texts: string[],
+  options: WorkersAiEmbeddingOptions
+): Promise<number[][]> {
+  if (texts.length === 0) return []
+  const normalizedTexts = texts.map(text => text.trim())
+  if (normalizedTexts.some(text => !text)) {
     throw new Error('Cannot embed empty text')
   }
 
@@ -35,11 +37,11 @@ export async function createWorkersAiEmbedding(
   const config = getCloudflareConfig(source)
   const input = options.kind === 'query'
     ? {
-        queries: [normalizedText],
+        queries: normalizedTexts,
         instruction: RETRIEVAL_INSTRUCTION
       }
     : {
-        documents: [normalizedText]
+        documents: normalizedTexts
       }
 
   const payload = await ai.run(CLOUDFLARE_EMBEDDING_MODEL, input, {
@@ -58,9 +60,13 @@ export async function createWorkersAiEmbedding(
     signal: options.signal
   })
 
-  const values = readEmbeddingValues(payload)
-  if (!values || values.length !== config.embeddingDimensions) {
-    throw new Error(`Workers AI returned an invalid embedding; expected ${config.embeddingDimensions} values`)
+  const embeddings = payload.data
+  if (!Array.isArray(embeddings)
+    || embeddings.length !== texts.length
+    || embeddings.some(values => !Array.isArray(values)
+      || values.length !== config.embeddingDimensions
+      || values.some(value => typeof value !== 'number' || !Number.isFinite(value)))) {
+    throw new Error(`Workers AI returned invalid embeddings; expected ${texts.length} vectors with ${config.embeddingDimensions} values each`)
   }
-  return values
+  return embeddings
 }
